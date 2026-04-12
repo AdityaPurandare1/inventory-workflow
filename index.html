@@ -882,7 +882,7 @@ function processCSVText(text){
     renderXRef();
   }catch(err){showCR(false,'CSV import error: '+err.message)}
 }
-function csvLine(l){const r=[];let c='',q=false;for(let i=0;i<l.length;i++){const ch=l[i];if(ch==='"'){q=!q;continue}if(ch===','&&!q){r.push(c);c='';continue}c+=ch}r.push(c);return r}
+function csvLine(l){if(!l)return[];const r=[];let c='',q=false;for(let i=0;i<l.length;i++){const ch=l[i];if(ch==='"'){q=!q;continue}if(ch===','&&!q){r.push(c);c='';continue}c+=ch}r.push(c);return r}
 
 // ═══════════════════════════════════════════════════
 //  AUTOMATION — Scheduled pulls
@@ -930,7 +930,7 @@ function processImageFile(file){
   const reader=new FileReader();
   reader.onload=function(e){
     const dataUrl=e.target.result;
-    const base64=dataUrl.split(',')[1];
+    const base64=(dataUrl.split(',')[1])||'';
     const mimeType=file.type||'image/jpeg';
     pendingImages.push({dataUrl,base64,mimeType,name:file.name||'image'});
     renderImagePreviews();
@@ -984,7 +984,9 @@ ONLY skip a message if it has NO product name at all and just describes a locati
 - "Wine rack B row 12 no sticker to scan [photo]" — no product name, skip
 - "Bottle does not scan 750ml [photo]" — no product name, skip
 
-When in doubt, INCLUDE the item. Combine duplicates. Return [] only if truly zero products named.`;
+When in doubt, INCLUDE the item. Combine duplicates. Return [] only if truly zero products named.
+
+CRITICAL: Return ONLY a valid JSON array. No explanation, no prose, no markdown. Just the raw JSON array starting with [ and ending with ].`;
 
   // Build message content — text + images
   const content = [];
@@ -1000,7 +1002,7 @@ When in doubt, INCLUDE the item. Combine duplicates. Return [] only if truly zer
     for(const img of images) {
       content.push({
         type:'image_url',
-        image_url:{url:`data:${img.mimeType};base64,${img.base64}`, detail:'low'}
+        image_url:{url:`data:${img.mimeType};base64,${img.base64}`, detail:'auto'}
       });
     }
   }
@@ -1010,16 +1012,38 @@ When in doubt, INCLUDE the item. Combine duplicates. Return [] only if truly zer
   const res=await fetch('https://models.inference.ai.azure.com/chat/completions',{
     method:'POST',
     headers:{'Content-Type':'application/json','Authorization':'Bearer '+S.githubPat},
-    body:JSON.stringify({model:'gpt-4o-mini',temperature:0.3,messages:[
+    body:JSON.stringify({model:'gpt-4o-mini',temperature:0.3,max_tokens:4000,messages:[
       {role:'system',content:sysPrompt},
       {role:'user',content:content}
     ]})
   });
   if(!res.ok){const t=await res.text();throw new Error(`GitHub Models API ${res.status}: ${t.slice(0,200)}`)}
   const d=await res.json();
-  const raw=d.choices[0].message.content.trim();
-  const parsed=JSON.parse(raw.replace(/```json|```/g,'').trim());
-  return parsed.filter(i=>isValidProductName(i.item_name));
+  const raw=(d.choices&&d.choices[0]&&d.choices[0].message&&d.choices[0].message.content||'').trim();
+  if(!raw)return[];
+
+  // Robust JSON extraction — handle AI returning prose around the JSON
+  let parsed;
+  try{
+    // Try direct parse first
+    parsed=JSON.parse(raw.replace(/```json|```/g,'').trim());
+  }catch(e1){
+    // Try to find JSON array in the response
+    const arrMatch=raw.match(/\[[\s\S]*\]/);
+    if(arrMatch){
+      try{parsed=JSON.parse(arrMatch[0])}catch(e2){parsed=[]}
+    }else{
+      // Try to find JSON object and wrap in array
+      const objMatch=raw.match(/\{[\s\S]*\}/);
+      if(objMatch){
+        try{parsed=[JSON.parse(objMatch[0])]}catch(e3){parsed=[]}
+      }else{
+        parsed=[];
+      }
+    }
+  }
+  if(!Array.isArray(parsed))parsed=[];
+  return parsed.filter(i=>i&&i.item_name&&isValidProductName(i.item_name));
 }
 
 // ═══════════════════════════════════════════════════
@@ -1033,7 +1057,7 @@ function scoreSev(i){
   if(a&&w>=2)return'WATCH';if(!a&&v>=200)return'LOW';return'LOW';
 }
 function needsRC(i){const s=i.severity,v=Math.abs(i.variance_dollars||0),w=i.weeks_flagged||1;if(s==='CRITICAL'||s==='HIGH')return true;if(s==='MEDIUM'&&(v>=S.threshD||w>=S.threshW))return true;return false}
-function normalize(s){return(s||'').toLowerCase().replace(/[^a-z0-9]/g,'')}
+function normalize(s){return String(s||'').toLowerCase().replace(/[^a-z0-9]/g,'')}
 function sevOrd(s){return{CRITICAL:0,HIGH:1,MEDIUM:2,WATCH:3,LOW:4}[s]??5}
 function weekLabel(){const n=new Date(),d=n.getDay(),b=d===0?6:d-1,m=new Date(n);m.setDate(n.getDate()-b);return`Week ${m.getFullYear()}-${String(m.getMonth()+1).padStart(2,'0')}-${String(m.getDate()).padStart(2,'0')}`}
 
@@ -1044,10 +1068,9 @@ const SIZE_TOKENS=new Set(['750ml','1l','375ml','700ml','1000ml','500ml','200ml'
 const JUNK_NAMES=new Set(['bottle','bottles','fridge','rack','room','shelf','bar','floor','stickers','sticker','craftable','wine','liquor','champagne','find','non','no','ceramic','small','product','not','scanning','does','scan','doesnt','one','two','three','four','five','six','seven','eight','nine','ten','row','rows','quantity','qty','located','labeled','unlabeled','unmarked','missing','damaged','bev','beverage','inventory','2nd','3rd','1st','4th','to','in','the','and','or','from','with','for','this','that','does','dont','prep','unknown','item','items','complete','done','wells','low']);
 
 function isValidProductName(name){
-  if(!name||name.length<4)return false;
+  if(!name||typeof name!=='string'||name.length<4)return false;
   const words=name.toLowerCase().split(/\s+/).filter(w=>w.length>1&&!SIZE_TOKENS.has(w));
   if(words.length===0)return false;
-  // Filter out junk words AND pure numbers
   const meaningful=words.filter(w=>!JUNK_NAMES.has(w)&&!/^\d+$/.test(w));
   return meaningful.length>=1;
 }
@@ -1135,20 +1158,30 @@ async function handleParse(){
   const totalImages=pendingImages.length;
   const IMG_BATCH=5; // Conservative batch size to stay under rate limits
   const BATCH_DELAY=15000; // 15s between batches to respect 60k tokens/min
+  let failedBatches=0;
 
-  // Helper: call parseWithAI with auto-retry on 429
+  // Helper: call parseWithAI with auto-retry on 429, graceful failure
   async function callWithRetry(text,venue,images,label){
     for(let attempt=0;attempt<3;attempt++){
       try{
-        return await parseWithAI(text,venue,images);
+        const result=await parseWithAI(text,venue,images);
+        return result||[];
       }catch(e){
         if(e.message.includes('429')&&attempt<2){
           const wait=attempt===0?15:30;
           btn.innerHTML=`<span class="spin">⟳</span> Rate limited — waiting ${wait}s then retrying ${label}...`;
           await new Promise(r=>setTimeout(r,wait*1000));
-        }else throw e;
+        }else if(attempt<2&&(e.message.includes('Failed to fetch')||e.message.includes('NetworkError')||e.message.includes('timeout'))){
+          btn.innerHTML=`<span class="spin">⟳</span> Network error — retrying ${label} in 5s...`;
+          await new Promise(r=>setTimeout(r,5000));
+        }else{
+          console.warn(`Batch ${label} failed after ${attempt+1} attempts:`,e.message);
+          failedBatches++;
+          return[]; // Return empty instead of crashing
+        }
       }
     }
+    return[];
   }
 
   try{
@@ -1203,7 +1236,7 @@ async function handleParse(){
     }
     const issues=[...seen.values()];
 
-    if(!issues.length){showRes(res,false,'No issues found.');return}
+    if(!issues.length){showRes(res,false,failedBatches>0?`No issues found (${failedBatches} batch${failedBatches>1?'es':''} failed — try again with fewer images).`:'No issues found.');return}
     const now=new Date().toLocaleString(),wk=weekLabel();
     for(const iss of issues){
       const key=`${normalize(venue)}|${normalize(iss.item_name)}`;
@@ -1212,7 +1245,8 @@ async function handleParse(){
       if(idx>=0){const old=S.items[idx];obj.weeks_flagged=(old.weeks_flagged||1)+1;obj.variance_dollars=old.variance_dollars||0;obj.variance_pct=old.variance_pct||0;obj.craftable_match=old.craftable_match||'';obj.craftable_status=old.craftable_status||'';obj.category=old.category||'';obj.repeat_status=obj.weeks_flagged>=15?'CHRONIC (15+)':obj.weeks_flagged>=10?'PERSISTENT (10-14)':obj.weeks_flagged>=5?'RECURRING (5-9)':obj.weeks_flagged>=2?'REPEATING (2-4)':'NEW';S.items[idx]=obj}else{S.items.push(obj)}
     }
     crossRef();
-    let html=`&#10003; ${issues.length} item(s) for ${esc(venue)}${hasImages?' (from text'+(totalImages?' + '+totalImages+' images':'')+')'  :''}<div class="issue-cards">`;
+    const warnTxt=failedBatches>0?` <span style="color:var(--watch)">(${failedBatches} batch${failedBatches>1?'es':''} had errors — some images may not have been read)</span>`:'';
+    let html=`&#10003; ${issues.length} item(s) for ${esc(venue)}${hasImages?' (from text'+(totalImages?' + '+totalImages+' images':'')+')':''}${warnTxt}<div class="issue-cards">`;
     issues.forEach(i=>{const f=S.items.find(x=>normalize(x.venue)===normalize(venue)&&normalize(x.item_name)===normalize(i.item_name));html+=`<div class="ic"><div><div class="nm">${esc(i.item_name)}</div><div class="mt">${esc(i.issue_type||'')} ${i.quantity?'· '+i.quantity+' btl':''}${i.location?' · '+esc(i.location):''}</div></div><span class="sev sev-${f?f.severity:'LOW'}">${f?f.severity:'LOW'}</span></div>`});
     html+='</div>';showRes(res,true,html);
     document.getElementById('msgIn').value='';
