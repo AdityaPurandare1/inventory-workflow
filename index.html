@@ -885,19 +885,33 @@ function setupAutoPull(){
 //  GPT-4o-mini via GitHub Models
 // ═══════════════════════════════════════════════════
 async function parseWithAI(text,venue){
-  const sysPrompt=`You are an inventory issue parser for "${venue}" (H.Wood Group).
-Extract ALL inventory issues. Return ONLY valid JSON array — no markdown, no explanation.
-Each object: { "item_name": string, "sku": string|null, "issue_type": "Missing"|"Damaged"|"No Sticker"|"Product not in Craftable"|"Product not scanning"|"Scans as different item"|"Unknown variance"|"Quantity mismatch"|"Other", "quantity": number|null, "location": string|null, "notes": string (max 120 chars) }
-Combine duplicates. If none found, return [].`;
+  const sysPrompt=`You are an inventory issue parser for "${venue}" (H.Wood Group bar/restaurant).
+
+TASK: Extract inventory issues from Slack messages. Return ONLY a valid JSON array.
+
+CRITICAL RULES FOR item_name:
+- item_name MUST be an actual product/brand name (e.g. "Patrón Silver 750ml", "Dom Perignon Luminous Brut 750ml", "Kari Vodka 360ml")
+- NEVER use locations as item_name (e.g. NOT "Wine rack D", "Champagne fridge", "Liquor room", "Bar fridge", "Wine fridge one")
+- NEVER use descriptions as item_name (e.g. NOT "No stickers", "Non craftable", "Bottle", "ceramic bottles")
+- If the message only describes a location + issue but the product name is in an image you cannot read, SKIP that item entirely
+- If someone says "Wine rack B row 12 no sticker to scan" with only a photo, SKIP it — you cannot identify the product
+- Only include items where you can determine the ACTUAL BRAND/PRODUCT NAME from the text
+
+Each object must have:
+{ "item_name": string (ACTUAL BRAND NAME with size), "sku": string|null, "issue_type": "Missing"|"Damaged"|"No Sticker"|"Product not in Craftable"|"Product not scanning"|"Scans as different item"|"Unknown variance"|"Quantity mismatch"|"Mislabeled"|"Other", "quantity": number|null, "location": string|null (where in the venue), "notes": string (max 120 chars) }
+
+Combine duplicates. If no identifiable products found, return [].`;
   const res=await fetch('https://models.inference.ai.azure.com/chat/completions',{
     method:'POST',
     headers:{'Content-Type':'application/json','Authorization':'Bearer '+S.githubPat},
-    body:JSON.stringify({model:'gpt-4o-mini',temperature:0.15,messages:[{role:'system',content:sysPrompt},{role:'user',content:text}]})
+    body:JSON.stringify({model:'gpt-4o-mini',temperature:0.1,messages:[{role:'system',content:sysPrompt},{role:'user',content:text}]})
   });
   if(!res.ok){const t=await res.text();throw new Error(`GitHub Models API ${res.status}: ${t.slice(0,200)}`)}
   const d=await res.json();
   const raw=d.choices[0].message.content.trim();
-  return JSON.parse(raw.replace(/```json|```/g,'').trim());
+  const parsed=JSON.parse(raw.replace(/```json|```/g,'').trim());
+  // Post-filter: remove any items that are clearly not product names
+  return parsed.filter(i=>isValidProductName(i.item_name));
 }
 
 // ═══════════════════════════════════════════════════
@@ -918,27 +932,78 @@ function weekLabel(){const n=new Date(),d=n.getDay(),b=d===0?6:d-1,m=new Date(n)
 // ═══════════════════════════════════════════════════
 //  CROSS-REFERENCE
 // ═══════════════════════════════════════════════════
-function similarity(a,b){if(a===b)return 1;if(!a||!b)return 0;const sA=new Set(a.split('')),sB=new Set(b.split(''));let o=0;sA.forEach(c=>{if(sB.has(c))o++});const s=(2*o)/(sA.size+sB.size);if(a.includes(b)||b.includes(a))return Math.max(s,0.9);return s}
+const SIZE_TOKENS=new Set(['750ml','1l','375ml','700ml','1000ml','500ml','200ml','187ml','15l','175l','84oz','84floz','12oz','112floz','16floz','32floz','64oz','05gal','1gal','1each','1pack','8oz','750','375','700','1000','ml','oz','l','fl','720ml','739ml','250ml','360ml']);
+const JUNK_NAMES=new Set(['bottle','bottles','fridge','rack','room','shelf','bar','floor','stickers','sticker','craftable','wine','liquor','champagne','find','non','no','ceramic','small','product','not','scanning','does','scan','doesnt','one','two','three','four','five','six','seven','eight','nine','ten','row','rows','quantity','qty','located','labeled','unlabeled','unmarked','missing','damaged','bev','beverage','inventory','2nd','3rd','1st','4th','to','in','the','and','or','from','with','for','this','that','does','dont','prep']);
+
+function isValidProductName(name){
+  if(!name||name.length<4)return false;
+  const words=name.toLowerCase().split(/\s+/).filter(w=>w.length>1&&!SIZE_TOKENS.has(w));
+  if(words.length===0)return false;
+  // Filter out junk words AND pure numbers
+  const meaningful=words.filter(w=>!JUNK_NAMES.has(w)&&!/^\d+$/.test(w));
+  return meaningful.length>=1;
+}
+
+function similarity(a,b){
+  if(a===b)return 1;
+  if(!a||!b)return 0;
+  if(a.length<5||b.length<5)return 0;
+  // Substring match — only if shorter is substantial
+  const shorter=a.length<=b.length?a:b, longer=a.length>b.length?a:b;
+  if(shorter.length>=8&&longer.includes(shorter)&&shorter.length/longer.length>=0.4)return 0.95;
+  // Word-level matching (remove size tokens)
+  const wa=new Set(a.split(/\s+/).filter(w=>!SIZE_TOKENS.has(w)&&w.length>1));
+  const wb=new Set(b.split(/\s+/).filter(w=>!SIZE_TOKENS.has(w)&&w.length>1));
+  if(!wa.size||!wb.size)return 0;
+  let overlap=0;wa.forEach(w=>{if(wb.has(w))overlap++});
+  if(!overlap)return 0;
+  // Require at least one meaningful overlapping word (>2 chars)
+  let hasMeaningful=false;wa.forEach(w=>{if(wb.has(w)&&w.length>2)hasMeaningful=true});
+  if(!hasMeaningful)return 0;
+  const wordScore=(2*overlap)/(wa.size+wb.size);
+  // Trigram check for brand misspellings
+  const triA=new Set(),triB=new Set();
+  for(let i=0;i<a.length-2;i++)triA.add(a.slice(i,i+3));
+  for(let i=0;i<b.length-2;i++)triB.add(b.slice(i,i+3));
+  let triOvlp=0;triA.forEach(t=>{if(triB.has(t))triOvlp++});
+  const triScore=triA.size&&triB.size?(2*triOvlp)/(triA.size+triB.size):0;
+  return Math.max(wordScore,triScore);
+}
+const SIM_THRESHOLD=0.42;
 
 function venueMatch(a,b){
-  if(!a||!b)return true; // if either is empty, match anyway
+  if(!a||!b)return true;
   const na=normalize(a),nb=normalize(b);
   if(na===nb)return true;
-  if(na.includes(nb)||nb.includes(na))return true; // "birdstreetsclub" includes "birdstreet"
-  if(similarity(na,nb)>=0.7)return true;
-  return false;
+  if(na.includes(nb)||nb.includes(na))return true;
+  // Simple char overlap for venue names only
+  const sA=new Set(na.split('')),sB=new Set(nb.split(''));
+  let o=0;sA.forEach(c=>{if(sB.has(c))o++});
+  return(2*o)/(sA.size+sB.size)>=0.75;
 }
 
 function crossRef(){
   if(!S.craftData.length)return;
   for(const item of S.items){
-    const nn=normalize(item.item_name);let best=null,bs=0;
-    for(const cv of S.craftData){
-      if(!venueMatch(item.venue,cv.venue))continue;
-      const sc=similarity(nn,normalize(cv.item_name));
-      if(sc>bs&&sc>=0.6){bs=sc;best=cv}
+    // Skip cross-referencing if item name is not a real product
+    if(!isValidProductName(item.item_name)){
+      item.craftable_status='NOT IN CRAFTABLE';
+      item.severity=scoreSev(item);item.recount=needsRC(item);
+      continue;
     }
-    if(best){item.variance_dollars=best.variance_dollars;item.variance_pct=best.variance_pct;item.craftable_match=best.item_name;item.craftable_status=bs>=0.85?'YES — In Craftable':'REVIEW — Low Confidence';item.category=best.category||item.category}
+    // Skip if issue type explicitly says not in craftable (it won't be there)
+    const itype=(item.issue_type||'').toLowerCase();
+    const skipMatch=itype.includes('not in craftable');
+
+    const nn=item.item_name.toLowerCase();let best=null,bs=0;
+    if(!skipMatch){
+      for(const cv of S.craftData){
+        if(!venueMatch(item.venue,cv.venue))continue;
+        const sc=similarity(nn,cv.item_name.toLowerCase());
+        if(sc>bs&&sc>=SIM_THRESHOLD){bs=sc;best=cv}
+      }
+    }
+    if(best){item.variance_dollars=best.variance_dollars;item.variance_pct=best.variance_pct;item.craftable_match=best.item_name;item.craftable_status=bs>=0.7?'YES — In Craftable':'REVIEW — Low Confidence';item.category=best.category||item.category}
     else{item.craftable_status=item.craftable_status||'NOT IN CRAFTABLE'}
     item.severity=scoreSev(item);item.recount=needsRC(item);
   }
