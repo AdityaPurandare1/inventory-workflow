@@ -1133,23 +1133,36 @@ async function handleParse(){
   res.style.display='none';
 
   const totalImages=pendingImages.length;
-  const IMG_BATCH=8; // Max images per API call to avoid payload limits
+  const IMG_BATCH=5; // Conservative batch size to stay under rate limits
+  const BATCH_DELAY=15000; // 15s between batches to respect 60k tokens/min
+
+  // Helper: call parseWithAI with auto-retry on 429
+  async function callWithRetry(text,venue,images,label){
+    for(let attempt=0;attempt<3;attempt++){
+      try{
+        return await parseWithAI(text,venue,images);
+      }catch(e){
+        if(e.message.includes('429')&&attempt<2){
+          const wait=attempt===0?15:30;
+          btn.innerHTML=`<span class="spin">⟳</span> Rate limited — waiting ${wait}s then retrying ${label}...`;
+          await new Promise(r=>setTimeout(r,wait*1000));
+        }else throw e;
+      }
+    }
+  }
 
   try{
     let allIssues=[];
 
-    // Step 1: Parse text (+ first batch of images if <=IMG_BATCH total)
     if(hasText||hasImages){
       if(hasImages && totalImages<=IMG_BATCH){
-        // Small batch — send text + all images in one call
         btn.innerHTML=`<span class="spin">⟳</span> Parsing text + ${totalImages} images...`;
-        const issues=await parseWithAI(hasText?msg:'',venue,pendingImages);
+        const issues=await callWithRetry(hasText?msg:'',venue,pendingImages,'');
         allIssues.push(...(issues||[]));
       } else {
-        // Large batch — parse text first, then images in batches
         if(hasText){
           btn.innerHTML=`<span class="spin">⟳</span> Parsing text...`;
-          const textIssues=await parseWithAI(msg,venue,null);
+          const textIssues=await callWithRetry(msg,venue,null,'text');
           allIssues.push(...(textIssues||[]));
         }
 
@@ -1159,8 +1172,16 @@ async function handleParse(){
             batches.push(pendingImages.slice(i,i+IMG_BATCH));
           }
           for(let b=0;b<batches.length;b++){
-            btn.innerHTML=`<span class="spin">⟳</span> Reading images batch ${b+1}/${batches.length} (${batches[b].length} images)...`;
-            const imgIssues=await parseWithAI('',venue,batches[b]);
+            // Wait between batches to avoid rate limits
+            if(b>0||(hasText)){
+              const waitSec=Math.ceil(BATCH_DELAY/1000);
+              for(let s=waitSec;s>0;s--){
+                btn.innerHTML=`<span class="spin">⟳</span> Waiting ${s}s before batch ${b+1}/${batches.length}...`;
+                await new Promise(r=>setTimeout(r,1000));
+              }
+            }
+            btn.innerHTML=`<span class="spin">⟳</span> Reading images ${b*IMG_BATCH+1}-${Math.min((b+1)*IMG_BATCH,totalImages)} of ${totalImages}...`;
+            const imgIssues=await callWithRetry('',venue,batches[b],`batch ${b+1}`);
             allIssues.push(...(imgIssues||[]));
           }
         }
