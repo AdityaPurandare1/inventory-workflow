@@ -229,17 +229,35 @@ Sarah: 2x Hendrick's Gin unaccounted, walk-in"></textarea>
   <!-- ═══ CRAFTABLE ═══ -->
   <div id="pnl-craftable" class="pnl">
     <div class="sg">
-      <h3>Craftable Variance — Live Pull</h3>
-      <p class="hint" style="margin:0 0 10px">Pulls variance data from Craftable API and cross-references with parsed issues.</p>
+      <h3>Craftable — Actual vs Theoretical Variance</h3>
+      <p class="hint" style="margin:0 0 10px">Pulls AVT variance data from Craftable for the current period. Store is auto-detected from your API, or select manually.</p>
       <div class="row" style="margin-bottom:10px">
-        <div class="field"><label>Venue Filter</label><select id="cVen" style="margin:0"><option value="">All Venues</option></select></div>
+        <div class="field"><label>Store</label><select id="cVen" style="margin:0"><option value="">Auto-detect (all stores)</option></select></div>
+        <div class="field"><label>Period</label>
+          <select id="cPeriod" style="margin:0">
+            <option value="current">Current Period</option>
+            <option value="last">Last Period</option>
+          </select>
+        </div>
+      </div>
+      <div class="row" style="margin-bottom:10px">
         <div class="field"><label>Min Variance ($)</label><input type="number" id="cMin" value="50" style="margin:0"></div>
+        <div class="field"><label>Category Filter</label>
+          <select id="cCat" style="margin:0">
+            <option value="">All Categories</option>
+            <option value="5310">5310 - Liquor Cost</option>
+            <option value="5315">5315 - Bar Consumables</option>
+            <option value="5320">5320 - Wine Cost</option>
+            <option value="5325">5325 - Beer Cost</option>
+          </select>
+        </div>
       </div>
       <div style="display:flex;gap:8px;margin-top:8px">
-        <button class="btn" onclick="pullCraftable()">Pull Now</button>
+        <button class="btn" onclick="pullCraftable()">Pull Current Variance</button>
         <button class="btn-s" onclick="document.getElementById('cFile').click()">Import CSV</button>
         <input type="file" id="cFile" accept=".csv,.xlsx" style="display:none" onchange="importCSV(event)">
       </div>
+      <div id="cPeriodInfo" style="margin-top:10px;font-size:10px;color:var(--dim);display:none"></div>
     </div>
     <div class="result" id="cRes"></div>
     <div id="xrefTbl" style="margin-top:16px"></div>
@@ -330,7 +348,7 @@ Sarah: 2x Hendrick's Gin unaccounted, walk-in"></textarea>
       <h3>Discovered Endpoints</h3>
       <p class="hint" style="margin:0 0 10px">Auto-populated after API discovery. Override if needed.</p>
       <label>Locations Endpoint</label><input type="text" id="sEpLoc" placeholder="/locations">
-      <label>Variance Endpoint</label><input type="text" id="sEpVar" placeholder="/variance or /reports/variance">
+      <label>Variance Endpoint</label><input type="text" id="sEpVar" placeholder="/reports/avt-summary or /variance">
       <label>Products Endpoint</label><input type="text" id="sEpProd" placeholder="/products">
       <button class="btn-s" onclick="saveEndpoints()">Save Endpoints</button>
     </div>
@@ -453,14 +471,14 @@ async function discoverAPI(){
 
     // Try common endpoints directly
     apiLogLine(`\n<span class="info">═══ Probing Common Endpoints ═══</span>`);
-    const probes=['/locations','/establishments','/venues','/variance','/reports/variance','/products','/items','/inventory','/counts','/me','/user','/organizations'];
+    const probes=['/locations','/establishments','/venues','/stores','/variance','/reports/variance','/reports/avt-summary','/reports/avt','/products','/items','/inventory','/counts','/me','/user','/organizations','/periods'];
     for(const p of probes){
       try{
         const res=await fetch(apiUrl(p),{headers:apiHeaders()});
         const status=res.status;
         if(status===200){apiLogLine(`<span class="ok">✓ ${p} → 200 OK</span>`);
-          if(p.includes('location')||p.includes('establishment')||p.includes('venue')){S.endpoints.locations=p;apiLogLine(`  → Saved as Locations endpoint`)}
-          if(p.includes('variance')||p.includes('report')){S.endpoints.variance=p;apiLogLine(`  → Saved as Variance endpoint`)}
+          if(p.includes('location')||p.includes('establishment')||p.includes('venue')||p.includes('store')){S.endpoints.locations=p;apiLogLine(`  → Saved as Locations endpoint`)}
+          if(p.includes('variance')||p.includes('report')||p.includes('avt')){S.endpoints.variance=p;apiLogLine(`  → Saved as Variance endpoint`)}
           if(p.includes('product')||p.includes('item')){S.endpoints.products=p;apiLogLine(`  → Saved as Products endpoint`)}
         }else if(status===401||status===403){apiLogLine(`<span class="fail">✗ ${p} → ${status} (auth issue)</span>`)}
         else{apiLogLine(`  ${p} → ${status}`)}
@@ -552,50 +570,112 @@ async function testVariance(){
 }
 
 // ═══════════════════════════════════════════════════
-//  CRAFTABLE — Pull variance data
+//  CRAFTABLE — Pull AVT variance data
 // ═══════════════════════════════════════════════════
 async function pullCraftable(){
-  const ep=S.endpoints.variance;
-  if(!ep&&!S.apiKey){showCR(false,'Configure your Craftable API in Settings → API Explorer first.');return}
+  if(!S.apiKey){showCR(false,'Add your Craftable API key in Settings first.');return}
 
   showCR(false,'<span class="spin">⟳</span> Pulling from Craftable...');
   document.getElementById('cRes').style.display='block';
   document.getElementById('cRes').className='result info';
 
   try{
-    const venue=document.getElementById('cVen').value;
+    const store=document.getElementById('cVen').value;
     const minVar=parseFloat(document.getElementById('cMin').value)||50;
-    const path=ep||'/variance';
-    const params=venue?{location:venue}:{};
+    const period=document.getElementById('cPeriod').value;
+    const catFilter=document.getElementById('cCat').value;
 
-    const data=await apiFetch(path,params);
-    const raw=Array.isArray(data)?data:data.data||data.items||data.products||data.variance_items||data.results||[];
+    // Build params — Craftable AVT endpoints typically accept store_id, period, category
+    const params={};
+    if(store)params.store_id=store;
+    if(period==='last')params.period='last';
+    else params.period='current';
+    if(catFilter)params.category=catFilter;
 
+    // Try known AVT endpoint patterns
+    const ep=S.endpoints.variance||'/reports/avt-summary';
+    const data=await apiFetch(ep,params);
+
+    // Craftable can return nested data — handle multiple response shapes
+    let raw=[];
+    if(Array.isArray(data)){
+      raw=data;
+    }else if(data.data){
+      raw=Array.isArray(data.data)?data.data:[];
+    }else{
+      // Try to find the items array in the response
+      const keys=Object.keys(data);
+      for(const k of keys){
+        if(Array.isArray(data[k])&&data[k].length>0){raw=data[k];break}
+      }
+    }
+
+    // Extract period info if available
+    const periodInfo=data.period||data.date_range||data.period_name||'';
+    const storeName=data.store||data.store_name||data.establishment_name||'';
+    if(periodInfo||storeName){
+      const infoEl=document.getElementById('cPeriodInfo');
+      infoEl.style.display='block';
+      infoEl.innerHTML=`${storeName?'<strong>Store:</strong> '+esc(storeName)+' &nbsp;|&nbsp; ':''}${periodInfo?'<strong>Period:</strong> '+esc(String(periodInfo)):''}`;
+    }
+
+    // Map Craftable AVT fields to our format
+    // Craftable AVT columns: store, category, starting_inventory, purchases, transfers,
+    // depletions, actual_amount, theo_amount, variance_amt, variance_pct
     const items=raw.filter(i=>{
-      const d=Math.abs(parseFloat(i.variance_cost||i.variance_value||i.variance_dollars||i.cost_variance||0));
-      return d>=minVar;
-    }).map(i=>({
-      venue:venue||i.location||i.location_name||i.venue||i.establishment_name||'Unknown',
-      item_name:i.name||i.product_name||i.item_name||'Unknown',
-      sku:i.sku||i.product_id||i.upc||'',
-      variance_dollars:parseFloat(i.variance_cost||i.variance_value||i.variance_dollars||i.cost_variance||0),
-      variance_pct:parseFloat(i.variance_percentage||i.variance_pct||i.pct_variance||0),
-      category:i.category||i.cost_category||i.group||''
-    }));
+      const v=Math.abs(parseFloat(
+        i.variance_amt||i.variance_amount||i.variance_cost||i.variance_value||
+        i.variance_dollars||i.cost_variance||i.variance||0
+      ));
+      return v>=minVar;
+    }).map(i=>{
+      const venue=store||i.store||i.store_name||i.location||i.location_name||
+        i.venue||i.establishment_name||storeName||'Unknown';
+      return{
+        venue,
+        item_name:i.name||i.product_name||i.item_name||i.product||i.description||'Unknown',
+        sku:i.sku||i.product_id||i.upc||i.item_id||'',
+        variance_dollars:parseFloat(i.variance_amt||i.variance_amount||i.variance_cost||
+          i.variance_value||i.variance_dollars||i.cost_variance||i.variance||0),
+        variance_pct:parseFloat(i.variance_pct||i.variance_percent||i.variance_percentage||
+          i['variance_%']||i.pct_variance||0),
+        category:i.category||i.cost_category||i.category_name||i.group||'',
+        actual_amount:parseFloat(i.actual_amount||i.actual||i.actual_cost||0),
+        theo_amount:parseFloat(i.theo_amount||i.theoretical||i.theoretical_amount||
+          i.theo||i.expected||0),
+        starting_inventory:parseFloat(i.starting_inventory||i.opening||i.start_inv||0),
+        purchases:parseFloat(i.purchases||i.received||0),
+        depletions:parseFloat(i.depletions||i.usage||i.sold||0),
+        period:periodInfo||period
+      };
+    });
+
+    // Auto-detect store name and add to venues if new
+    if(items.length>0){
+      const detectedStores=[...new Set(items.map(i=>i.venue).filter(v=>v&&v!=='Unknown'))];
+      for(const ds of detectedStores){
+        if(!S.venues.some(v=>normalize(v)===normalize(ds))){
+          S.venues.push(ds);
+          apiLogLine&&apiLogLine(`<span class="info">Auto-added venue: ${ds}</span>`);
+        }
+      }
+      renderVS();
+    }
 
     S.craftData=items;S.lastPull=new Date().toISOString();sv();
     crossRef();
-    showCR(true,`&#10003; Pulled ${items.length} variance item(s). Last pull: ${new Date().toLocaleTimeString()}`);
+    const storeLabel=items.length>0?[...new Set(items.map(i=>i.venue))].join(', '):'';
+    showCR(true,`&#10003; Pulled ${items.length} variance item(s)${storeLabel?' for '+esc(storeLabel):''} | ${new Date().toLocaleTimeString()}`);
     renderXRef();
   }catch(e){
-    showCR(false,`Error: ${e.message}<br><br>Options:<br>• Run API Explorer first to discover endpoints<br>• Use "Import CSV" to upload a Craftable export<br>• Check CORS — the Craftable API may need to whitelist your domain`);
+    showCR(false,`Error: ${e.message}<br><br>Options:<br>• Run API Explorer to discover the correct variance endpoint<br>• Use "Import CSV" — export from Craftable's AVT Summary page (download icon top-right)<br>• Check if CORS is blocking browser requests`);
   }
 }
 
 function showCR(ok,html){const el=document.getElementById('cRes');el.className='result '+(ok?'ok':'err');el.innerHTML=html;el.style.display='block'}
 
 // ═══════════════════════════════════════════════════
-//  CRAFTABLE — CSV Import
+//  CRAFTABLE — CSV Import (AVT export format)
 // ═══════════════════════════════════════════════════
 function importCSV(ev){
   const file=ev.target.files[0];if(!file)return;
@@ -605,22 +685,52 @@ function importCSV(ev){
       const lines=e.target.result.split('\n').map(l=>l.trim()).filter(l=>l);
       if(lines.length<2)throw new Error('File too short');
       const hdrs=csvLine(lines[0]).map(h=>h.toLowerCase().trim());
-      const nI=hdrs.findIndex(h=>h.includes('product')||h.includes('item')||h.includes('name'));
-      const vI=hdrs.findIndex(h=>(h.includes('variance')||h.includes('cost'))&&h.includes('$'));
-      const vpI=hdrs.findIndex(h=>h.includes('variance')&&h.includes('%'));
-      const cI=hdrs.findIndex(h=>h.includes('categor'));
-      const sI=hdrs.findIndex(h=>h.includes('store')||h.includes('venue')||h.includes('location'));
-      const skI=hdrs.findIndex(h=>h.includes('sku'));
-      if(nI<0)throw new Error('No product/item name column found');
+
+      // Map Craftable AVT export columns
+      const col=(keywords)=>hdrs.findIndex(h=>keywords.some(k=>h.includes(k)));
+      const nI=col(['product','item','name','description']);
+      const vI=col(['variance amt','variance_amt','variance amount','variance $','variance_cost','cost_variance']);
+      const vpI=col(['variance %','variance_pct','variance_percent']);
+      const cI=col(['category','cat']);
+      const sI=col(['store','venue','location','establishment']);
+      const skI=col(['sku','upc','product_id','item_id']);
+      const actI=col(['actual amount','actual_amount','actual cost','actual']);
+      const theoI=col(['theo amount','theo_amount','theoretical','expected']);
+      const startI=col(['starting inventory','starting_inventory','opening']);
+      const purI=col(['purchases','received']);
+      const depI=col(['depletions','usage','sold']);
+
+      if(nI<0)throw new Error('No product/item name column found. Columns detected: '+hdrs.filter(h=>h).join(', '));
       const minV=parseFloat(document.getElementById('cMin').value)||50;
       const items=[];
       for(let i=1;i<lines.length;i++){
         const c=csvLine(lines[i]);
         const vd=vI>=0?parseFloat(String(c[vI]).replace(/[$,]/g,''))||0:0;
         if(Math.abs(vd)<minV&&vI>=0)continue;
-        items.push({venue:sI>=0?c[sI]||'':document.getElementById('cVen').value||'Unknown',item_name:c[nI]||'',sku:skI>=0?c[skI]||'':'',variance_dollars:vd,variance_pct:vpI>=0?parseFloat(String(c[vpI]).replace(/%/g,''))||0:0,category:cI>=0?c[cI]||'':''});
+        items.push({
+          venue:sI>=0?c[sI]||'':document.getElementById('cVen').value||'Unknown',
+          item_name:c[nI]||'',
+          sku:skI>=0?c[skI]||'':'',
+          variance_dollars:vd,
+          variance_pct:vpI>=0?parseFloat(String(c[vpI]).replace(/%/g,''))||0:0,
+          category:cI>=0?c[cI]||'':'',
+          actual_amount:actI>=0?parseFloat(String(c[actI]).replace(/[$,]/g,''))||0:0,
+          theo_amount:theoI>=0?parseFloat(String(c[theoI]).replace(/[$,]/g,''))||0:0,
+          starting_inventory:startI>=0?parseFloat(String(c[startI]).replace(/[$,]/g,''))||0:0,
+          purchases:purI>=0?parseFloat(String(c[purI]).replace(/[$,]/g,''))||0:0,
+          depletions:depI>=0?parseFloat(String(c[depI]).replace(/[$,]/g,''))||0:0,
+          period:'imported'
+        });
       }
-      S.craftData=items;S.lastPull=new Date().toISOString();sv();crossRef();showCR(true,`&#10003; Imported ${items.length} items.`);renderXRef();
+
+      // Auto-detect stores
+      const stores=[...new Set(items.map(i=>i.venue).filter(v=>v&&v!=='Unknown'))];
+      for(const ds of stores){if(!S.venues.some(v=>normalize(v)===normalize(ds))){S.venues.push(ds)}}
+      renderVS();
+
+      S.craftData=items;S.lastPull=new Date().toISOString();sv();crossRef();
+      showCR(true,`&#10003; Imported ${items.length} items${stores.length?' from '+stores.join(', '):''}.`);
+      renderXRef();
     }catch(err){showCR(false,'Import error: '+err.message)}
   };
   reader.readAsText(file);ev.target.value='';
@@ -734,11 +844,12 @@ function renderXRef(){
   const rows=[];
   for(const cv of S.craftData){
     const m=S.items.find(i=>normalize(i.venue)===normalize(cv.venue)&&(normalize(i.item_name)===normalize(cv.item_name)||normalize(i.craftable_match)===normalize(cv.item_name)));
-    rows.push({venue:cv.venue,product:cv.item_name,vd:cv.variance_dollars,vp:cv.variance_pct,cat:cv.category,issue:m?m.issue_type:'',wks:m?m.weeks_flagged:0,sev:m?m.severity:(Math.abs(cv.variance_dollars)>=500?'HIGH':Math.abs(cv.variance_dollars)>=200?'MEDIUM':'LOW'),rc:m?m.recount:Math.abs(cv.variance_dollars)>=S.threshD,status:m?m.craftable_status:'Craftable Only'})}
+    rows.push({venue:cv.venue,product:cv.item_name,actual:cv.actual_amount||0,theo:cv.theo_amount||0,vd:cv.variance_dollars,vp:cv.variance_pct,cat:cv.category,issue:m?m.issue_type:'',wks:m?m.weeks_flagged:0,sev:m?m.severity:(Math.abs(cv.variance_dollars)>=500?'HIGH':Math.abs(cv.variance_dollars)>=200?'MEDIUM':'LOW'),rc:m?m.recount:Math.abs(cv.variance_dollars)>=S.threshD})}
   let html='<div class="tbl-wrap"><table><thead><tr>';
-  ['Venue','Product','Variance $','Var %','Category','Issue','Wks','Severity','Recount?'].forEach(h=>html+=`<th>${h}</th>`);
+  ['Store','Product','Actual $','Theo $','Variance $','Var %','Category','Issue','Wks','Severity','Recount?'].forEach(h=>html+=`<th>${h}</th>`);
   html+='</tr></thead><tbody>';
-  rows.forEach(r=>{const vc=r.vd<0?'vn':r.vd>0?'vp':'';html+=`<tr><td>${esc(r.venue)}</td><td>${esc(r.product)}</td><td class="num ${vc}">${fD(r.vd)}</td><td class="num">${r.vp?r.vp.toFixed(1)+'%':'—'}</td><td style="font-size:10px">${esc(r.cat)}</td><td style="font-size:10px">${esc(r.issue)}</td><td class="num">${r.wks||'—'}</td><td><span class="sev sev-${r.sev}">${r.sev}</span></td><td>${r.rc?'<span class="recount-flag">RECOUNT</span>':'<span class="no-rc">—</span>'}</td></tr>`});
+  if(!rows.length)html+='<tr><td colspan="11" style="text-align:center;padding:24px;color:var(--muted)">No data</td></tr>';
+  rows.forEach(r=>{const vc=r.vd<0?'vn':r.vd>0?'vp':'';html+=`<tr><td>${esc(r.venue)}</td><td>${esc(r.product)}</td><td class="num">${r.actual?fD(r.actual):'—'}</td><td class="num">${r.theo?fD(r.theo):'—'}</td><td class="num ${vc}">${fD(r.vd)}</td><td class="num">${r.vp?r.vp.toFixed(1)+'%':'—'}</td><td style="font-size:10px">${esc(r.cat)}</td><td style="font-size:10px">${esc(r.issue)}</td><td class="num">${r.wks||'—'}</td><td><span class="sev sev-${r.sev}">${r.sev}</span></td><td>${r.rc?'<span class="recount-flag">RECOUNT</span>':'<span class="no-rc">—</span>'}</td></tr>`});
   html+='</tbody></table></div>';c.innerHTML=html;
 }
 
