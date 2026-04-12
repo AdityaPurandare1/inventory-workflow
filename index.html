@@ -157,6 +157,12 @@ td.num{text-align:right;font-variant-numeric:tabular-nums}
 
 /* Responsive */
 @media(max-width:640px){.hdr h1{font-size:2rem}.row,.tbl-ctrl{flex-direction:column}.stats{flex-direction:column}.fsel{width:100%}.tbl-ctrl .left{width:100%}}
+
+/* Image drop zone */
+#imgDrop.dragover{border-color:var(--accent);background:var(--accent-dim)}
+.img-thumb{position:relative;width:64px;height:64px;border-radius:6px;overflow:hidden;border:1px solid var(--border)}
+.img-thumb img{width:100%;height:100%;object-fit:cover}
+.img-thumb .rm{position:absolute;top:2px;right:2px;width:18px;height:18px;background:rgba(0,0,0,0.7);color:var(--error);border:none;border-radius:50%;font-size:12px;cursor:pointer;display:flex;align-items:center;justify-content:center;line-height:1}
 </style>
 </head>
 <body>
@@ -197,7 +203,17 @@ John: 3 bottles of Patrón Silver missing from back shelf
 Maria: Grey Goose label damaged, can't scan
 Tom: Aperol cracked — pulled
 Sarah: 2x Hendrick's Gin unaccounted, walk-in"></textarea>
-    <p class="hint">AI extracts products, quantities, issue types, locations.</p>
+    <p class="hint">AI extracts products, quantities, issue types, locations from text.</p>
+
+    <label>Bottle / Label Images</label>
+    <div id="imgDrop" style="border:2px dashed var(--border);border-radius:var(--radius);padding:24px;text-align:center;color:var(--text-muted);font-size:11px;cursor:pointer;transition:border-color 0.2s,background 0.2s;margin-bottom:14px;" onclick="document.getElementById('imgFileIn').click()">
+      Drop images here, paste from clipboard (Ctrl+V), or click to browse<br>
+      <span style="font-size:10px;color:var(--text-muted)">Supports JPG, PNG, WEBP — photos of bottles, labels, barcodes</span>
+      <input type="file" id="imgFileIn" accept="image/*" multiple style="display:none" onchange="addImageFiles(event)">
+    </div>
+    <div id="imgPreviews" style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:14px;"></div>
+    <p class="hint" id="imgCount" style="display:none;margin-top:-8px;">0 images added — AI will read bottle labels and extract product names</p>
+
     <button class="btn btn-full" id="parseBtn" onclick="handleParse()">Parse & Add Issues</button>
     <div class="result" id="parseRes"></div>
   </div>
@@ -884,7 +900,70 @@ function setupAutoPull(){
 // ═══════════════════════════════════════════════════
 //  GPT-4o-mini via GitHub Models
 // ═══════════════════════════════════════════════════
-async function parseWithAI(text,venue){
+//  IMAGE HANDLING — drag, drop, paste, preview
+// ═══════════════════════════════════════════════════
+let pendingImages = []; // Array of {dataUrl, base64, mimeType}
+
+function setupImageHandlers(){
+  const drop=document.getElementById('imgDrop');
+  if(!drop)return;
+  drop.addEventListener('dragover',e=>{e.preventDefault();drop.classList.add('dragover')});
+  drop.addEventListener('dragleave',()=>drop.classList.remove('dragover'));
+  drop.addEventListener('drop',e=>{e.preventDefault();drop.classList.remove('dragover');addFiles(e.dataTransfer.files)});
+  // Global paste handler for images
+  document.addEventListener('paste',e=>{
+    const items=e.clipboardData?.items;if(!items)return;
+    for(const item of items){
+      if(item.type.startsWith('image/')){
+        e.preventDefault();
+        const blob=item.getAsFile();
+        if(blob)processImageFile(blob);
+      }
+    }
+  });
+}
+
+function addImageFiles(ev){addFiles(ev.target.files);ev.target.value='';}
+function addFiles(files){for(const f of files){if(f.type.startsWith('image/'))processImageFile(f)}}
+
+function processImageFile(file){
+  const reader=new FileReader();
+  reader.onload=function(e){
+    const dataUrl=e.target.result;
+    const base64=dataUrl.split(',')[1];
+    const mimeType=file.type||'image/jpeg';
+    pendingImages.push({dataUrl,base64,mimeType,name:file.name||'image'});
+    renderImagePreviews();
+  };
+  reader.readAsDataURL(file);
+}
+
+function removeImage(idx){
+  pendingImages.splice(idx,1);
+  renderImagePreviews();
+}
+
+function renderImagePreviews(){
+  const wrap=document.getElementById('imgPreviews');
+  const countEl=document.getElementById('imgCount');
+  wrap.innerHTML='';
+  pendingImages.forEach((img,i)=>{
+    const div=document.createElement('div');div.className='img-thumb';
+    div.innerHTML=`<img src="${img.dataUrl}" alt="${img.name}"><button class="rm" onclick="removeImage(${i})">&times;</button>`;
+    wrap.appendChild(div);
+  });
+  if(pendingImages.length>0){
+    countEl.style.display='block';
+    countEl.textContent=`${pendingImages.length} image${pendingImages.length>1?'s':''} added — AI will read bottle labels and extract product names`;
+  }else{
+    countEl.style.display='none';
+  }
+}
+
+// ═══════════════════════════════════════════════════
+//  AI PARSING — Text + Images via GPT-4o-mini Vision
+// ═══════════════════════════════════════════════════
+async function parseWithAI(text,venue,images){
   const sysPrompt=`You are an inventory issue parser for "${venue}" (H.Wood Group).
 
 Parse these Slack messages and extract EVERY inventory issue you can find. Be thorough — extract ALL items mentioned by name, even casually. Return a JSON array.
@@ -900,29 +979,46 @@ IMPORTANT — Be aggressive about extraction:
 - "moet 375ml rose did enter into Craftable" → YES, extract "Moet Imperial Rose 375ml"
 - "Francois Carillon Chassagne Montrachet 2023 750ml" → YES, extract it
 - "Vocal Vineyards Pinot Noir 2022 750ml" → YES, extract it
-- "Nikka miyagiikyo 750ml doesn't scan" → YES, extract "Nikka Miyagikyo 750ml"
-- "Del maguey Pechuga 750ml doesn't scan" → YES, extract "Del Maguey Pechuga 750ml"
-- "Giffard cassis noir 750ml doesn't scan" → YES, extract "Giffard Cassis Noir 750ml"
-- "Auchentoshan 3 woods 750ml doesnt scan" → YES, extract "Auchentoshan Three Wood 750ml"
-- "Avuã cachaca 750ml doesn't scan" → YES, extract "Avua Cachaca 750ml"
-- "Dom Perignon Luminous" or "LUMINOUS variant" → YES, extract "Dom Perignon Luminous Brut 750ml"
-- "peach Red Bull 8.4oz" → YES, extract "Peach Red Bull 8.4oz"
 
 ONLY skip a message if it has NO product name at all and just describes a location with a photo reference, like:
 - "Wine rack B row 12 no sticker to scan [photo]" — no product name, skip
 - "Bottle does not scan 750ml [photo]" — no product name, skip
 
 When in doubt, INCLUDE the item. Combine duplicates. Return [] only if truly zero products named.`;
+
+  // Build message content — text + images
+  const content = [];
+
+  // Add text if present
+  if(text && text.trim()) {
+    content.push({type:'text', text: text});
+  }
+
+  // Add images if present
+  if(images && images.length > 0) {
+    content.push({type:'text', text:`\n\nThe following ${images.length} image(s) are photos of bottles/labels from the inventory count. For EACH image, identify the product name, size, and any visible issues (damaged label, no sticker, etc). Include every product you can read from the labels.`});
+    for(const img of images) {
+      content.push({
+        type:'image_url',
+        image_url:{url:`data:${img.mimeType};base64,${img.base64}`, detail:'low'}
+      });
+    }
+  }
+
+  if(content.length===0) return [];
+
   const res=await fetch('https://models.inference.ai.azure.com/chat/completions',{
     method:'POST',
     headers:{'Content-Type':'application/json','Authorization':'Bearer '+S.githubPat},
-    body:JSON.stringify({model:'gpt-4o-mini',temperature:0.3,messages:[{role:'system',content:sysPrompt},{role:'user',content:text}]})
+    body:JSON.stringify({model:'gpt-4o-mini',temperature:0.3,messages:[
+      {role:'system',content:sysPrompt},
+      {role:'user',content:content}
+    ]})
   });
   if(!res.ok){const t=await res.text();throw new Error(`GitHub Models API ${res.status}: ${t.slice(0,200)}`)}
   const d=await res.json();
   const raw=d.choices[0].message.content.trim();
   const parsed=JSON.parse(raw.replace(/```json|```/g,'').trim());
-  // Post-filter: remove any items that are clearly not product names (locations, descriptions, etc.)
   return parsed.filter(i=>isValidProductName(i.item_name));
 }
 
@@ -945,7 +1041,7 @@ function weekLabel(){const n=new Date(),d=n.getDay(),b=d===0?6:d-1,m=new Date(n)
 //  CROSS-REFERENCE
 // ═══════════════════════════════════════════════════
 const SIZE_TOKENS=new Set(['750ml','1l','375ml','700ml','1000ml','500ml','200ml','187ml','15l','175l','84oz','84floz','12oz','112floz','16floz','32floz','64oz','05gal','1gal','1each','1pack','8oz','750','375','700','1000','ml','oz','l','fl','720ml','739ml','250ml','360ml']);
-const JUNK_NAMES=new Set(['bottle','bottles','fridge','rack','room','shelf','bar','floor','stickers','sticker','craftable','wine','liquor','champagne','find','non','no','ceramic','small','product','not','scanning','does','scan','doesnt','one','two','three','four','five','six','seven','eight','nine','ten','row','rows','quantity','qty','located','labeled','unlabeled','unmarked','missing','damaged','bev','beverage','inventory','2nd','3rd','1st','4th','to','in','the','and','or','from','with','for','this','that','does','dont','prep']);
+const JUNK_NAMES=new Set(['bottle','bottles','fridge','rack','room','shelf','bar','floor','stickers','sticker','craftable','wine','liquor','champagne','find','non','no','ceramic','small','product','not','scanning','does','scan','doesnt','one','two','three','four','five','six','seven','eight','nine','ten','row','rows','quantity','qty','located','labeled','unlabeled','unmarked','missing','damaged','bev','beverage','inventory','2nd','3rd','1st','4th','to','in','the','and','or','from','with','for','this','that','does','dont','prep','unknown','item','items','complete','done','wells','low']);
 
 function isValidProductName(name){
   if(!name||name.length<4)return false;
@@ -1028,11 +1124,16 @@ function crossRef(){
 async function handleParse(){
   const venue=document.getElementById('locSel').value,msg=document.getElementById('msgIn').value;
   const btn=document.getElementById('parseBtn'),res=document.getElementById('parseRes');
-  if(!venue){showRes(res,false,'Select a venue.');return}if(!msg.trim()){showRes(res,false,'Paste messages.');return}
+  const hasText=msg&&msg.trim();
+  const hasImages=pendingImages.length>0;
+  if(!venue){showRes(res,false,'Select a venue.');return}
+  if(!hasText&&!hasImages){showRes(res,false,'Paste messages or add images.');return}
   if(!S.githubPat){showRes(res,false,'Add your GitHub token in Settings.');return}
-  btn.disabled=true;btn.innerHTML='<span class="spin">⟳</span> Parsing...';res.style.display='none';
+  btn.disabled=true;
+  btn.innerHTML=hasImages?`<span class="spin">⟳</span> Parsing ${hasText?'text + ':''}${pendingImages.length} image${pendingImages.length>1?'s':''}...`:'<span class="spin">⟳</span> Parsing...';
+  res.style.display='none';
   try{
-    const issues=await parseWithAI(msg,venue);
+    const issues=await parseWithAI(hasText?msg:'',venue,hasImages?pendingImages:null);
     if(!issues||!issues.length){showRes(res,false,'No issues found.');return}
     const now=new Date().toLocaleString(),wk=weekLabel();
     for(const iss of issues){
@@ -1042,9 +1143,11 @@ async function handleParse(){
       if(idx>=0){const old=S.items[idx];obj.weeks_flagged=(old.weeks_flagged||1)+1;obj.variance_dollars=old.variance_dollars||0;obj.variance_pct=old.variance_pct||0;obj.craftable_match=old.craftable_match||'';obj.craftable_status=old.craftable_status||'';obj.category=old.category||'';obj.repeat_status=obj.weeks_flagged>=15?'CHRONIC (15+)':obj.weeks_flagged>=10?'PERSISTENT (10-14)':obj.weeks_flagged>=5?'RECURRING (5-9)':obj.weeks_flagged>=2?'REPEATING (2-4)':'NEW';S.items[idx]=obj}else{S.items.push(obj)}
     }
     crossRef();
-    let html=`&#10003; ${issues.length} item(s) for ${esc(venue)}<div class="issue-cards">`;
+    let html=`&#10003; ${issues.length} item(s) for ${esc(venue)}${hasImages?' (from text'+(pendingImages.length?' + '+pendingImages.length+' images':'')+')'  :''}<div class="issue-cards">`;
     issues.forEach(i=>{const f=S.items.find(x=>normalize(x.venue)===normalize(venue)&&normalize(x.item_name)===normalize(i.item_name));html+=`<div class="ic"><div><div class="nm">${esc(i.item_name)}</div><div class="mt">${esc(i.issue_type||'')} ${i.quantity?'· '+i.quantity+' btl':''}${i.location?' · '+esc(i.location):''}</div></div><span class="sev sev-${f?f.severity:'LOW'}">${f?f.severity:'LOW'}</span></div>`});
-    html+='</div>';showRes(res,true,html);document.getElementById('msgIn').value='';
+    html+='</div>';showRes(res,true,html);
+    document.getElementById('msgIn').value='';
+    pendingImages=[];renderImagePreviews();
   }catch(e){showRes(res,false,'Error: '+e.message)}
   finally{btn.disabled=false;btn.textContent='Parse & Add Issues'}
 }
@@ -1167,7 +1270,7 @@ function toast(m){const el=document.createElement('div');el.className='toast';el
 function updateBadge(){document.getElementById('cBadge').textContent=S.items.filter(i=>i.recount).length}
 
 // INIT
-renderVS();renderSettings();updateBadge();setupAutoPull();
+renderVS();renderSettings();updateBadge();setupAutoPull();setupImageHandlers();
 </script>
 </body>
 </html>
