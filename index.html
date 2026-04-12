@@ -1,0 +1,809 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>H.Wood Inventory Workflow</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg-deep: #06060c;
+  --bg-surface: #0c0c16;
+  --bg-elevated: #12121f;
+  --bg-hover: #1a1a2e;
+  --border: #1e1e32;
+  --border-active: #f5c842;
+  --text-primary: #e8e8f4;
+  --text-secondary: #7a7a9e;
+  --text-muted: #4a4a6a;
+  --accent: #f5c842;
+  --accent-dim: rgba(245, 200, 66, 0.12);
+  --critical: #ff5252;
+  --critical-bg: rgba(255, 82, 82, 0.1);
+  --high: #ff8a65;
+  --high-bg: rgba(255, 138, 101, 0.1);
+  --medium: #f5c842;
+  --medium-bg: rgba(245, 200, 66, 0.1);
+  --watch: #64b5f6;
+  --watch-bg: rgba(100, 181, 246, 0.1);
+  --low: #6bcf97;
+  --low-bg: rgba(107, 207, 151, 0.1);
+  --success: #6bcf97;
+  --error: #ff5252;
+  --radius: 8px;
+  --mono: 'JetBrains Mono', monospace;
+  --serif: 'Instrument Serif', serif;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:var(--bg-deep);color:var(--text-primary);font-family:var(--mono);font-size:13px;min-height:100vh}
+body::before{content:'';position:fixed;top:-40%;left:-20%;width:80%;height:80%;background:radial-gradient(ellipse,rgba(245,200,66,0.025) 0%,transparent 70%);pointer-events:none;z-index:0}
+.app{position:relative;z-index:1;max-width:1140px;margin:0 auto;padding:32px 24px 80px}
+
+/* Header */
+.hdr{margin-bottom:32px;display:flex;align-items:flex-end;justify-content:space-between;flex-wrap:wrap;gap:12px}
+.hdr h1{font-family:var(--serif);font-size:2.5rem;font-weight:400;color:var(--accent);letter-spacing:-0.02em;line-height:1}
+.hdr .tag{color:var(--text-muted);font-size:10px;letter-spacing:0.1em;text-transform:uppercase;margin-top:4px}
+.hdr-r{display:flex;gap:8px;align-items:center}
+
+/* Auto-run indicator */
+.auto-indicator{display:flex;align-items:center;gap:6px;padding:6px 12px;border-radius:20px;font-size:10px;font-weight:600;letter-spacing:0.05em}
+.auto-indicator.running{background:rgba(107,207,151,0.12);color:var(--success);border:1px solid rgba(107,207,151,0.25)}
+.auto-indicator.stopped{background:var(--critical-bg);color:var(--text-muted);border:1px solid var(--border)}
+.auto-indicator .dot{width:7px;height:7px;border-radius:50%;flex-shrink:0}
+.auto-indicator.running .dot{background:var(--success);animation:pulse 2s infinite}
+.auto-indicator.stopped .dot{background:var(--text-muted)}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.3}}
+
+/* Tabs */
+.tabs{display:flex;gap:2px;background:var(--bg-surface);border-radius:var(--radius);padding:3px;margin-bottom:24px;border:1px solid var(--border)}
+.tab{flex:1;padding:10px 12px;text-align:center;font-family:var(--mono);font-size:10px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:var(--text-muted);background:transparent;border:none;border-radius:6px;cursor:pointer;transition:all 0.2s}
+.tab:hover{color:var(--text-secondary)}
+.tab.active{background:var(--bg-elevated);color:var(--accent);box-shadow:0 1px 4px rgba(0,0,0,0.3)}
+.tab .badge{display:inline-block;background:var(--accent-dim);color:var(--accent);font-size:9px;padding:1px 6px;border-radius:10px;margin-left:4px}
+
+/* Panels */
+.pnl{display:none;animation:fadeIn 0.25s ease}
+.pnl.active{display:block}
+@keyframes fadeIn{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:translateY(0)}}
+
+/* Forms */
+label{display:block;font-size:10px;color:var(--text-secondary);letter-spacing:0.12em;text-transform:uppercase;margin-bottom:6px;font-weight:500}
+select,input[type="text"],input[type="password"],input[type="number"],textarea{width:100%;background:var(--bg-surface);border:1px solid var(--border);border-radius:var(--radius);color:var(--text-primary);font-family:var(--mono);font-size:12px;padding:10px 12px;outline:none;transition:border-color 0.2s,box-shadow 0.2s;margin-bottom:14px}
+select:focus,input:focus,textarea:focus{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-dim)}
+textarea{height:180px;resize:vertical;line-height:1.7}
+.hint{font-size:10px;color:var(--text-muted);margin-top:-8px;margin-bottom:14px;line-height:1.5}
+
+/* Rows & buttons */
+.row{display:flex;gap:8px;align-items:flex-end}
+.row .field{flex:1}
+.row select,.row input{margin-bottom:0}
+.btn{background:var(--accent);color:var(--bg-deep);border:none;border-radius:var(--radius);padding:11px 22px;font-family:var(--mono);font-size:11px;font-weight:600;cursor:pointer;transition:opacity 0.2s;white-space:nowrap}
+.btn:hover{opacity:0.88}
+.btn:disabled{opacity:0.35;cursor:not-allowed}
+.btn-full{width:100%}
+.btn-s{background:var(--bg-elevated);color:var(--text-primary);border:1px solid var(--border);border-radius:var(--radius);padding:8px 14px;font-family:var(--mono);font-size:10px;cursor:pointer;transition:all 0.2s;white-space:nowrap}
+.btn-s:hover{border-color:var(--text-muted)}
+.btn-dng{color:var(--error);border-color:rgba(255,82,82,0.3)}
+.btn-dng:hover{border-color:var(--error);background:var(--critical-bg)}
+.btn-add{background:var(--bg-elevated);border:1px dashed var(--border);color:var(--accent);padding:10px 14px;border-radius:var(--radius);cursor:pointer;font-family:var(--mono);font-size:11px;transition:all 0.2s;flex-shrink:0}
+.btn-add:hover{border-color:var(--accent);background:var(--accent-dim)}
+
+/* Result */
+.result{margin-top:16px;padding:14px 18px;border-radius:var(--radius);font-size:12px;line-height:1.7;display:none;animation:fadeIn 0.3s}
+.result.ok{background:var(--low-bg);border:1px solid rgba(107,207,151,0.25);color:var(--success)}
+.result.err{background:var(--critical-bg);border:1px solid rgba(255,82,82,0.25);color:var(--error)}
+.result.info{background:var(--watch-bg);border:1px solid rgba(100,181,246,0.2);color:var(--watch)}
+
+/* Severity badges */
+.sev{padding:3px 9px;border-radius:4px;font-size:9px;font-weight:700;letter-spacing:0.06em;flex-shrink:0;text-transform:uppercase;display:inline-block}
+.sev-CRITICAL{background:var(--critical-bg);color:var(--critical)}
+.sev-HIGH{background:var(--high-bg);color:var(--high)}
+.sev-MEDIUM{background:var(--medium-bg);color:var(--medium)}
+.sev-WATCH{background:var(--watch-bg);color:var(--watch)}
+.sev-LOW{background:var(--low-bg);color:var(--low)}
+
+/* Stats */
+.stats{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px}
+.stat{flex:1;min-width:110px;background:var(--bg-surface);border:1px solid var(--border);border-radius:var(--radius);padding:12px 14px}
+.stat .n{font-size:1.5rem;font-family:var(--serif);font-weight:400;color:var(--accent)}
+.stat .l{font-size:9px;color:var(--text-muted);letter-spacing:0.1em;text-transform:uppercase;margin-top:2px}
+
+/* Table */
+.tbl-ctrl{display:flex;gap:8px;flex-wrap:wrap;justify-content:space-between;align-items:center;margin-bottom:10px}
+.tbl-ctrl .left{display:flex;gap:8px;flex-wrap:wrap}
+.fsel{width:auto;margin:0;padding:6px 10px;font-size:10px;min-width:130px}
+.tbl-wrap{overflow-x:auto;border:1px solid var(--border);border-radius:var(--radius);max-height:70vh;overflow-y:auto}
+table{width:100%;border-collapse:collapse;font-size:11px}
+thead th{background:var(--bg-elevated);color:var(--accent);font-size:9px;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;padding:9px 10px;text-align:left;border-bottom:1px solid var(--border);white-space:nowrap;cursor:pointer;user-select:none;position:sticky;top:0;z-index:2}
+thead th:hover{color:var(--text-primary)}
+thead th .sa{margin-left:3px;opacity:0.4}
+thead th.sorted .sa{opacity:1;color:var(--accent)}
+tbody td{padding:7px 10px;border-bottom:1px solid rgba(255,255,255,0.03);color:var(--text-primary);vertical-align:middle}
+tbody tr:hover{background:rgba(255,255,255,0.02)}
+td.num{text-align:right;font-variant-numeric:tabular-nums}
+.vn{color:var(--critical)}.vp{color:var(--low)}
+.recount-flag{display:inline-block;background:var(--critical-bg);color:var(--critical);font-size:9px;font-weight:700;padding:2px 8px;border-radius:3px;letter-spacing:0.06em}
+.no-rc{color:var(--text-muted);font-size:10px}
+
+/* Cards */
+.issue-cards{display:grid;gap:6px;margin-top:10px}
+.ic{display:flex;justify-content:space-between;align-items:center;padding:8px 12px;background:var(--bg-surface);border:1px solid var(--border);border-radius:6px}
+.ic .nm{font-size:11px}.ic .mt{font-size:9px;color:var(--text-muted);margin-top:1px}
+
+/* Settings */
+.sg{background:var(--bg-surface);border:1px solid var(--border);border-radius:var(--radius);padding:18px;margin-bottom:14px}
+.sg h3{font-family:var(--serif);font-size:1.1rem;font-weight:400;color:var(--text-primary);margin-bottom:10px}
+.lt{display:flex;flex-wrap:wrap;gap:4px;margin-bottom:10px;min-height:28px}
+.ltg{display:inline-flex;align-items:center;gap:6px;background:var(--bg-elevated);border:1px solid var(--border);border-radius:16px;padding:4px 11px;font-size:10px}
+.ltg .x{cursor:pointer;color:var(--text-muted);transition:color 0.2s}.ltg .x:hover{color:var(--error)}
+.add-loc{display:none;margin-bottom:14px;padding:12px;background:var(--bg-surface);border:1px solid var(--border);border-radius:var(--radius)}
+.add-loc.open{display:block}
+
+/* API Explorer */
+.api-log{background:var(--bg-surface);border:1px solid var(--border);border-radius:var(--radius);padding:14px;margin-top:14px;max-height:300px;overflow-y:auto;font-size:10px;line-height:1.6;white-space:pre-wrap;word-break:break-all;color:var(--text-secondary)}
+.api-log .req{color:var(--accent)}.api-log .ok{color:var(--success)}.api-log .fail{color:var(--error)}.api-log .info{color:var(--watch)}
+
+/* Empty */
+.empty{text-align:center;padding:40px 24px;color:var(--text-muted);font-size:12px;line-height:1.8}
+.empty .ico{font-size:24px;margin-bottom:8px;display:block}
+
+/* Spinner & Toast */
+.spin{display:inline-block;animation:sp .7s linear infinite}
+@keyframes sp{to{transform:rotate(360deg)}}
+.toast{position:fixed;bottom:24px;right:24px;background:var(--bg-elevated);border:1px solid var(--border);color:var(--text-primary);padding:10px 18px;border-radius:var(--radius);font-size:11px;z-index:999;animation:su .3s ease,fo .3s ease 2.5s forwards}
+@keyframes su{from{transform:translateY(20px);opacity:0}}
+@keyframes fo{to{opacity:0;transform:translateY(-10px)}}
+
+/* Responsive */
+@media(max-width:640px){.hdr h1{font-size:2rem}.row,.tbl-ctrl{flex-direction:column}.stats{flex-direction:column}.fsel{width:100%}.tbl-ctrl .left{width:100%}}
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="hdr">
+    <div>
+      <h1>Inventory Workflow</h1>
+      <p class="tag">H.Wood Group &middot; Automated Variance Tracker</p>
+    </div>
+    <div class="hdr-r">
+      <div class="auto-indicator stopped" id="autoInd">
+        <span class="dot"></span>
+        <span id="autoLabel">Auto: Off</span>
+      </div>
+      <button class="btn-s" onclick="switchTab('settings')">&#9881; Config</button>
+    </div>
+  </div>
+
+  <div class="tabs">
+    <button class="tab active" onclick="switchTab('parse')">Parse</button>
+    <button class="tab" onclick="switchTab('data')">Recount <span class="badge" id="cBadge">0</span></button>
+    <button class="tab" onclick="switchTab('craftable')">Craftable</button>
+    <button class="tab" onclick="switchTab('api')">API Explorer</button>
+    <button class="tab" onclick="switchTab('settings')">Settings</button>
+  </div>
+
+  <!-- ═══ PARSE ═══ -->
+  <div id="pnl-parse" class="pnl active">
+    <div class="row" style="margin-bottom:14px">
+      <div class="field"><label>Venue</label><select id="locSel"><option value="">— Select venue —</option></select></div>
+      <button class="btn-add" onclick="toggleAdd()">+ New</button>
+    </div>
+    <div class="add-loc" id="addBox"><div class="row"><input type="text" id="newLN" placeholder="e.g. Delilah - Vegas" style="margin:0"><button class="btn-s" onclick="addLoc()">Add</button><button class="btn-s" onclick="toggleAdd()">Cancel</button></div></div>
+    <label>Paste Slack Messages</label>
+    <textarea id="msgIn" placeholder="Paste inventory messages...
+
+John: 3 bottles of Patrón Silver missing from back shelf
+Maria: Grey Goose label damaged, can't scan
+Tom: Aperol cracked — pulled
+Sarah: 2x Hendrick's Gin unaccounted, walk-in"></textarea>
+    <p class="hint">AI extracts products, quantities, issue types, locations.</p>
+    <button class="btn btn-full" id="parseBtn" onclick="handleParse()">Parse & Add Issues</button>
+    <div class="result" id="parseRes"></div>
+  </div>
+
+  <!-- ═══ RECOUNT ═══ -->
+  <div id="pnl-data" class="pnl">
+    <div class="stats" id="statsBar"></div>
+    <div class="tbl-ctrl">
+      <div class="left">
+        <select class="fsel" id="fVen" onchange="renderData()"><option value="">All Venues</option></select>
+        <select class="fsel" id="fSev" onchange="renderData()">
+          <option value="">All Severity</option>
+          <option value="CRITICAL">Critical</option><option value="HIGH">High</option>
+          <option value="MEDIUM">Medium</option><option value="WATCH">Watch</option><option value="LOW">Low</option>
+        </select>
+        <select class="fsel" id="fRc" onchange="renderData()">
+          <option value="">All Items</option><option value="yes">Recount Needed</option><option value="no">No Recount</option>
+        </select>
+      </div>
+      <div style="display:flex;gap:6px">
+        <button class="btn-s" onclick="exportCSV('recount')">&#8595; Recount CSV</button>
+        <button class="btn-s" onclick="exportCSV('full')">&#8595; Full CSV</button>
+        <button class="btn-s btn-dng" onclick="clearAll()">Clear</button>
+      </div>
+    </div>
+    <div id="dataTbl"></div>
+  </div>
+
+  <!-- ═══ CRAFTABLE ═══ -->
+  <div id="pnl-craftable" class="pnl">
+    <div class="sg">
+      <h3>Craftable Variance — Live Pull</h3>
+      <p class="hint" style="margin:0 0 10px">Pulls variance data from Craftable API and cross-references with parsed issues.</p>
+      <div class="row" style="margin-bottom:10px">
+        <div class="field"><label>Venue Filter</label><select id="cVen" style="margin:0"><option value="">All Venues</option></select></div>
+        <div class="field"><label>Min Variance ($)</label><input type="number" id="cMin" value="50" style="margin:0"></div>
+      </div>
+      <div style="display:flex;gap:8px;margin-top:8px">
+        <button class="btn" onclick="pullCraftable()">Pull Now</button>
+        <button class="btn-s" onclick="document.getElementById('cFile').click()">Import CSV</button>
+        <input type="file" id="cFile" accept=".csv,.xlsx" style="display:none" onchange="importCSV(event)">
+      </div>
+    </div>
+    <div class="result" id="cRes"></div>
+    <div id="xrefTbl" style="margin-top:16px"></div>
+  </div>
+
+  <!-- ═══ API EXPLORER ═══ -->
+  <div id="pnl-api" class="pnl">
+    <div class="sg">
+      <h3>Craftable API Explorer</h3>
+      <p class="hint" style="margin:0 0 10px">Discovers available endpoints from the Swagger spec. Run this first to confirm your API setup works.</p>
+      <div class="row" style="margin-bottom:10px">
+        <div class="field"><label>API Base URL</label><input type="text" id="apiBase" style="margin:0" value="https://api.craftable.com/v1"></div>
+      </div>
+      <div class="row" style="margin-bottom:10px">
+        <div class="field"><label>API Key</label><input type="password" id="apiKeyExplorer" style="margin:0" placeholder="PytYKiR0Bd..."></div>
+      </div>
+      <div style="display:flex;gap:8px">
+        <button class="btn" onclick="discoverAPI()">1. Discover Endpoints</button>
+        <button class="btn-s" onclick="testAuth()">2. Test Auth</button>
+        <button class="btn-s" onclick="listLocations()">3. List Locations</button>
+        <button class="btn-s" onclick="testVariance()">4. Test Variance</button>
+      </div>
+    </div>
+    <div class="api-log" id="apiLog">Ready. Click "Discover Endpoints" to scan the Craftable API.\n\nThis will:\n  1. Fetch the Swagger/OpenAPI spec\n  2. List all available endpoints\n  3. Identify the correct variance, location, and product endpoints\n  4. Save the configuration for automated pulls</div>
+  </div>
+
+  <!-- ═══ SETTINGS ═══ -->
+  <div id="pnl-settings" class="pnl">
+    <div class="sg">
+      <h3>Craftable API</h3>
+      <p class="hint" style="margin:0 0 10px">From <a href="https://api.craftable.com/v1/swagger-ui/index.html" target="_blank" style="color:var(--accent)">api.craftable.com/v1/swagger-ui</a></p>
+      <label>API Base URL</label>
+      <input type="text" id="sApiBase" value="https://api.craftable.com/v1">
+      <label>API Key</label>
+      <input type="password" id="sApiKey" placeholder="PytYKiR0BdqOnhCIy_6sG0jhXO3FFBAPt_o82Bx">
+      <p class="hint">Your key goes here. Stored only in your browser's localStorage.</p>
+      <label>Auth Method</label>
+      <select id="sAuthMethod">
+        <option value="bearer">Authorization: Bearer &lt;key&gt;</option>
+        <option value="xapi">X-API-Key: &lt;key&gt;</option>
+        <option value="query">?api_key=&lt;key&gt; (query param)</option>
+      </select>
+      <button class="btn-s" onclick="saveAPI()">Save API Config</button>
+    </div>
+
+    <div class="sg">
+      <h3>GitHub Token (AI Parsing)</h3>
+      <p class="hint" style="margin:0 0 10px">Uses GPT-4o-mini via <a href="https://github.com/marketplace/models" target="_blank" style="color:var(--accent)">GitHub Models</a>. Create a PAT at <a href="https://github.com/settings/tokens" target="_blank" style="color:var(--accent)">github.com/settings/tokens</a> — no special scopes needed.</p>
+      <input type="password" id="sGithubPat" placeholder="ghp_xxxxxxxxxxxx...">
+      <button class="btn-s" onclick="saveGithubPat()">Save</button>
+    </div>
+
+    <div class="sg">
+      <h3>Automation</h3>
+      <p class="hint" style="margin:0 0 10px">Auto-pull from Craftable on a schedule. Runs while this page is open.</p>
+      <div class="row" style="margin-bottom:10px">
+        <div class="field"><label>Pull Interval</label>
+          <select id="sInterval" style="margin:0">
+            <option value="0">Disabled</option>
+            <option value="15">Every 15 minutes</option>
+            <option value="30" selected>Every 30 minutes</option>
+            <option value="60">Every hour</option>
+            <option value="120">Every 2 hours</option>
+          </select>
+        </div>
+        <div class="field"><label>Min Variance ($)</label><input type="number" id="sMinVar" value="50" style="margin:0"></div>
+      </div>
+      <button class="btn-s" onclick="saveAuto()">Save & Start</button>
+    </div>
+
+    <div class="sg">
+      <h3>Venues</h3>
+      <div class="lt" id="locTags"></div>
+      <div class="row"><div class="field"><input type="text" id="sNewLoc" placeholder="Add venue..." style="margin:0"></div></div>
+      <button class="btn-s" onclick="addLocS()" style="margin-top:6px">+ Add</button>
+    </div>
+
+    <div class="sg">
+      <h3>Recount Thresholds</h3>
+      <div class="row">
+        <div class="field"><label>Min Variance $ for Recount</label><input type="number" id="sThrD" value="100" style="margin:0"></div>
+        <div class="field"><label>Min Weeks Flagged</label><input type="number" id="sThrW" value="3" style="margin:0"></div>
+      </div>
+      <button class="btn-s" onclick="saveThr()" style="margin-top:6px">Save</button>
+    </div>
+
+    <div class="sg">
+      <h3>Discovered Endpoints</h3>
+      <p class="hint" style="margin:0 0 10px">Auto-populated after API discovery. Override if needed.</p>
+      <label>Locations Endpoint</label><input type="text" id="sEpLoc" placeholder="/locations">
+      <label>Variance Endpoint</label><input type="text" id="sEpVar" placeholder="/variance or /reports/variance">
+      <label>Products Endpoint</label><input type="text" id="sEpProd" placeholder="/products">
+      <button class="btn-s" onclick="saveEndpoints()">Save Endpoints</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ═══════════════════════════════════════════════════
+//  STATE
+// ═══════════════════════════════════════════════════
+const SK='hw_inv_v3';
+const DV=['Bird Streets Club','Delilah - LA','Deliliah - Miami','Keys','Poppy','The Nice Guy'];
+let S=ld();
+function ld(){try{const r=localStorage.getItem(SK);if(r)return JSON.parse(r)}catch(e){}return{apiBase:'https://api.craftable.com/v1',apiKey:'',authMethod:'bearer',githubPat:'',venues:[...DV],items:[],craftData:[],threshD:100,threshW:3,interval:30,minVar:50,endpoints:{locations:'',variance:'',products:''},lastPull:null}}
+function sv(){try{localStorage.setItem(SK,JSON.stringify(S))}catch(e){}}
+
+// ═══════════════════════════════════════════════════
+//  TABS
+// ═══════════════════════════════════════════════════
+const PANELS=['parse','data','craftable','api','settings'];
+function switchTab(n){
+  document.querySelectorAll('.tab').forEach((t,i)=>{t.classList.toggle('active',PANELS[i]===n);document.getElementById('pnl-'+PANELS[i]).classList.toggle('active',PANELS[i]===n)});
+  if(n==='data')renderData();if(n==='craftable')renderXRef();if(n==='settings')renderSettings();
+}
+
+// ═══════════════════════════════════════════════════
+//  VENUES
+// ═══════════════════════════════════════════════════
+function renderVS(){['locSel','fVen','cVen'].forEach(id=>{const el=document.getElementById(id);if(!el)return;const c=el.value,f=el.options[0].text;el.innerHTML=`<option value="">${f}</option>`;S.venues.forEach(v=>{const o=document.createElement('option');o.value=v;o.textContent=v;el.appendChild(o)});if(c&&S.venues.includes(c))el.value=c})}
+function toggleAdd(){document.getElementById('addBox').classList.toggle('open');document.getElementById('newLN').focus()}
+function addLoc(){const n=document.getElementById('newLN').value.trim();if(!n)return;if(S.venues.some(v=>v.toLowerCase()===n.toLowerCase())){toast('Exists');return}S.venues.push(n);sv();renderVS();document.getElementById('locSel').value=n;document.getElementById('addBox').classList.remove('open');document.getElementById('newLN').value='';toast('Added: '+n)}
+function removeLoc(nm){S.venues=S.venues.filter(v=>v!==nm);sv();renderVS();renderSettings()}
+function addLocS(){const n=document.getElementById('sNewLoc').value.trim();if(!n)return;if(S.venues.some(v=>v.toLowerCase()===n.toLowerCase())){toast('Exists');return}S.venues.push(n);sv();document.getElementById('sNewLoc').value='';renderVS();renderSettings();toast('Added: '+n)}
+
+// ═══════════════════════════════════════════════════
+//  SETTINGS
+// ═══════════════════════════════════════════════════
+function renderSettings(){
+  document.getElementById('sApiBase').value=S.apiBase;document.getElementById('sApiKey').value=S.apiKey;
+  document.getElementById('sAuthMethod').value=S.authMethod;document.getElementById('sGithubPat').value=S.githubPat||'';
+  document.getElementById('apiKeyExplorer').value=S.apiKey;document.getElementById('apiBase').value=S.apiBase;
+  document.getElementById('sInterval').value=S.interval;document.getElementById('sMinVar').value=S.minVar;
+  document.getElementById('sThrD').value=S.threshD;document.getElementById('sThrW').value=S.threshW;
+  document.getElementById('sEpLoc').value=S.endpoints.locations||'';
+  document.getElementById('sEpVar').value=S.endpoints.variance||'';
+  document.getElementById('sEpProd').value=S.endpoints.products||'';
+  const w=document.getElementById('locTags');w.innerHTML='';
+  S.venues.forEach(v=>{const t=document.createElement('span');t.className='ltg';t.innerHTML=`${esc(v)} <span class="x" onclick="removeLoc('${v.replace(/'/g,"\\'")}')">&times;</span>`;w.appendChild(t)});
+}
+function saveAPI(){S.apiBase=document.getElementById('sApiBase').value.trim().replace(/\/$/,'');S.apiKey=document.getElementById('sApiKey').value.trim();S.authMethod=document.getElementById('sAuthMethod').value;sv();toast('API config saved')}
+function saveGithubPat(){S.githubPat=document.getElementById('sGithubPat').value.trim();sv();toast('GitHub token saved')}
+function saveAuto(){S.interval=parseInt(document.getElementById('sInterval').value)||0;S.minVar=parseFloat(document.getElementById('sMinVar').value)||50;sv();setupAutoPull();toast('Automation saved')}
+function saveThr(){S.threshD=parseFloat(document.getElementById('sThrD').value)||100;S.threshW=parseInt(document.getElementById('sThrW').value)||3;sv();toast('Thresholds saved')}
+function saveEndpoints(){S.endpoints.locations=document.getElementById('sEpLoc').value.trim();S.endpoints.variance=document.getElementById('sEpVar').value.trim();S.endpoints.products=document.getElementById('sEpProd').value.trim();sv();toast('Endpoints saved')}
+
+// ═══════════════════════════════════════════════════
+//  CRAFTABLE API — helpers
+// ═══════════════════════════════════════════════════
+function apiHeaders(){
+  const h={'Content-Type':'application/json','Accept':'application/json'};
+  const k=S.apiKey;
+  if(S.authMethod==='bearer')h['Authorization']='Bearer '+k;
+  else if(S.authMethod==='xapi')h['X-API-Key']=k;
+  return h;
+}
+function apiUrl(path,params={}){
+  let url=S.apiBase+path;
+  if(S.authMethod==='query')params.api_key=S.apiKey;
+  const qs=Object.entries(params).filter(([,v])=>v!==undefined&&v!=='').map(([k,v])=>`${k}=${encodeURIComponent(v)}`).join('&');
+  if(qs)url+='?'+qs;
+  return url;
+}
+
+async function apiFetch(path,params={},label=''){
+  const url=apiUrl(path,params);
+  apiLogLine(`<span class="req">→ GET ${url}</span>`);
+  try{
+    const res=await fetch(url,{headers:apiHeaders()});
+    const text=await res.text();
+    if(!res.ok){apiLogLine(`<span class="fail">← ${res.status} ${res.statusText}</span>`);apiLogLine(`<span class="fail">${text.slice(0,300)}</span>`);throw new Error(`${res.status}: ${text.slice(0,200)}`)}
+    let data;try{data=JSON.parse(text)}catch(e){apiLogLine(`<span class="ok">← ${res.status} (${text.length} bytes, non-JSON)</span>`);return text}
+    apiLogLine(`<span class="ok">← ${res.status} OK (${JSON.stringify(data).length} bytes)</span>`);
+    return data;
+  }catch(e){if(e.message.startsWith('Failed to fetch')){apiLogLine(`<span class="fail">← Network error — CORS or connectivity issue</span>`);apiLogLine(`<span class="info">Tip: If blocked by CORS, use the CSV import instead, or run through a proxy.</span>`)}throw e}
+}
+
+function apiLogLine(html){const el=document.getElementById('apiLog');el.innerHTML+='\n'+html;el.scrollTop=el.scrollHeight}
+
+// ═══════════════════════════════════════════════════
+//  API EXPLORER — Discover, Test, Configure
+// ═══════════════════════════════════════════════════
+async function discoverAPI(){
+  const base=document.getElementById('apiBase').value.trim().replace(/\/$/,'');
+  const key=document.getElementById('apiKeyExplorer').value.trim();
+  S.apiBase=base;S.apiKey=key;sv();
+  document.getElementById('apiLog').innerHTML='<span class="info">═══ API Discovery ═══</span>';
+
+  // Try common swagger/openapi spec locations
+  const specPaths=['/api-docs','/swagger.json','/openapi.json','/v3/api-docs','/swagger/v1/swagger.json','/../swagger.json','/../api-docs'];
+
+  let spec=null;
+  for(const sp of specPaths){
+    try{
+      apiLogLine(`<span class="req">Trying spec: ${base}${sp}</span>`);
+      const res=await fetch(base+sp,{headers:apiHeaders()});
+      if(res.ok){const t=await res.text();try{spec=JSON.parse(t);apiLogLine(`<span class="ok">✓ Found spec at ${sp}</span>`);break}catch(e){}}
+    }catch(e){}
+  }
+
+  if(!spec){
+    apiLogLine(`<span class="fail">\nCouldn't auto-fetch swagger spec (likely CORS).</span>`);
+    apiLogLine(`<span class="info">\n═══ MANUAL SETUP INSTRUCTIONS ═══</span>`);
+    apiLogLine(`<span class="info">1. Open in your browser: ${base}/swagger-ui/index.html</span>`);
+    apiLogLine(`<span class="info">2. Look for these endpoint groups:</span>`);
+    apiLogLine(`   • Locations / Venues — GET /locations or /establishments`);
+    apiLogLine(`   • Variance / Reports — GET /variance or /reports/variance`);
+    apiLogLine(`   • Products / Items  — GET /products or /items`);
+    apiLogLine(`<span class="info">3. Enter the paths in Settings → Discovered Endpoints</span>`);
+    apiLogLine(`<span class="info">4. Use "Test Auth" to verify your key works</span>`);
+
+    // Try common endpoints directly
+    apiLogLine(`\n<span class="info">═══ Probing Common Endpoints ═══</span>`);
+    const probes=['/locations','/establishments','/venues','/variance','/reports/variance','/products','/items','/inventory','/counts','/me','/user','/organizations'];
+    for(const p of probes){
+      try{
+        const res=await fetch(apiUrl(p),{headers:apiHeaders()});
+        const status=res.status;
+        if(status===200){apiLogLine(`<span class="ok">✓ ${p} → 200 OK</span>`);
+          if(p.includes('location')||p.includes('establishment')||p.includes('venue')){S.endpoints.locations=p;apiLogLine(`  → Saved as Locations endpoint`)}
+          if(p.includes('variance')||p.includes('report')){S.endpoints.variance=p;apiLogLine(`  → Saved as Variance endpoint`)}
+          if(p.includes('product')||p.includes('item')){S.endpoints.products=p;apiLogLine(`  → Saved as Products endpoint`)}
+        }else if(status===401||status===403){apiLogLine(`<span class="fail">✗ ${p} → ${status} (auth issue)</span>`)}
+        else{apiLogLine(`  ${p} → ${status}`)}
+      }catch(e){apiLogLine(`  ${p} → network error`)}
+    }
+    sv();renderSettings();
+    apiLogLine(`\n<span class="info">Discovery complete. Check Settings → Discovered Endpoints.</span>`);
+    return;
+  }
+
+  // Parse OpenAPI spec
+  apiLogLine(`\n<span class="info">═══ Parsing Spec ═══</span>`);
+  apiLogLine(`Title: ${spec.info?.title||'?'}  Version: ${spec.info?.version||'?'}`);
+
+  const paths=spec.paths||{};
+  const endpoints=Object.keys(paths);
+  apiLogLine(`Found ${endpoints.length} endpoints:\n`);
+
+  for(const ep of endpoints){
+    const methods=Object.keys(paths[ep]).filter(m=>['get','post','put','delete'].includes(m));
+    const desc=paths[ep][methods[0]]?.summary||paths[ep][methods[0]]?.description||'';
+    apiLogLine(`  ${methods.map(m=>m.toUpperCase()).join(',')} ${ep}${desc?' — '+desc:''}`);
+
+    const epl=ep.toLowerCase();
+    if(epl.includes('location')||epl.includes('establishment')||epl.includes('venue'))S.endpoints.locations=ep;
+    if(epl.includes('variance'))S.endpoints.variance=ep;
+    if(epl.includes('product')||epl.includes('item'))S.endpoints.products=ep;
+  }
+
+  sv();renderSettings();
+  apiLogLine(`\n<span class="ok">═══ Endpoints Configured ═══</span>`);
+  apiLogLine(`Locations: ${S.endpoints.locations||'(not found)'}`);
+  apiLogLine(`Variance:  ${S.endpoints.variance||'(not found)'}`);
+  apiLogLine(`Products:  ${S.endpoints.products||'(not found)'}`);
+  apiLogLine(`\n<span class="info">Now run "Test Auth" then "List Locations" to verify.</span>`);
+}
+
+async function testAuth(){
+  document.getElementById('apiLog').innerHTML+='<span class="info">\n═══ Auth Test ═══</span>';
+  try{
+    // Try a lightweight endpoint
+    const tryPaths=['/me','/user','/organizations',S.endpoints.locations,'/locations','/'].filter(Boolean);
+    for(const p of tryPaths){
+      try{
+        const res=await fetch(apiUrl(p),{headers:apiHeaders()});
+        if(res.status===200){apiLogLine(`<span class="ok">✓ Auth OK (${p} → 200)</span>`);return}
+        if(res.status===401){apiLogLine(`<span class="fail">✗ 401 Unauthorized — check your API key</span>`);return}
+        if(res.status===403){apiLogLine(`<span class="fail">✗ 403 Forbidden — key may lack permissions</span>`);return}
+      }catch(e){}
+    }
+    apiLogLine(`<span class="fail">Could not reach any endpoint. Check URL and network.</span>`);
+  }catch(e){apiLogLine(`<span class="fail">Error: ${e.message}</span>`)}
+}
+
+async function listLocations(){
+  apiLogLine(`<span class="info">\n═══ Listing Locations ═══</span>`);
+  const ep=S.endpoints.locations;
+  if(!ep){apiLogLine(`<span class="fail">No locations endpoint configured. Run Discovery first.</span>`);return}
+  try{
+    const data=await apiFetch(ep);
+    const locs=Array.isArray(data)?data:data.data||data.locations||data.establishments||data.results||[];
+    apiLogLine(`Found ${locs.length} location(s):`);
+    locs.forEach((l,i)=>{
+      const name=l.name||l.title||l.establishment_name||JSON.stringify(l).slice(0,80);
+      const id=l.id||l.location_id||l.establishment_id||'';
+      apiLogLine(`  ${i+1}. ${name} (id: ${id})`);
+      // Auto-add to venues
+      if(name&&!S.venues.some(v=>v.toLowerCase()===name.toLowerCase())){S.venues.push(name)}
+    });
+    sv();renderVS();renderSettings();
+    apiLogLine(`<span class="ok">Venues synced.</span>`);
+  }catch(e){apiLogLine(`<span class="fail">Error: ${e.message}</span>`)}
+}
+
+async function testVariance(){
+  apiLogLine(`<span class="info">\n═══ Testing Variance Pull ═══</span>`);
+  const ep=S.endpoints.variance;
+  if(!ep){apiLogLine(`<span class="fail">No variance endpoint configured. Run Discovery first.</span>`);return}
+  try{
+    const data=await apiFetch(ep);
+    const items=Array.isArray(data)?data:data.data||data.items||data.products||data.variance_items||data.results||[];
+    apiLogLine(`Received ${items.length} variance item(s).`);
+    if(items.length>0){
+      apiLogLine(`\nSample item structure:`);
+      apiLogLine(JSON.stringify(items[0],null,2).split('\n').map(l=>'  '+l).join('\n'));
+      apiLogLine(`\n<span class="ok">✓ Variance endpoint works. The automated pull will use this.</span>`);
+    }
+  }catch(e){apiLogLine(`<span class="fail">Error: ${e.message}</span>`)}
+}
+
+// ═══════════════════════════════════════════════════
+//  CRAFTABLE — Pull variance data
+// ═══════════════════════════════════════════════════
+async function pullCraftable(){
+  const ep=S.endpoints.variance;
+  if(!ep&&!S.apiKey){showCR(false,'Configure your Craftable API in Settings → API Explorer first.');return}
+
+  showCR(false,'<span class="spin">⟳</span> Pulling from Craftable...');
+  document.getElementById('cRes').style.display='block';
+  document.getElementById('cRes').className='result info';
+
+  try{
+    const venue=document.getElementById('cVen').value;
+    const minVar=parseFloat(document.getElementById('cMin').value)||50;
+    const path=ep||'/variance';
+    const params=venue?{location:venue}:{};
+
+    const data=await apiFetch(path,params);
+    const raw=Array.isArray(data)?data:data.data||data.items||data.products||data.variance_items||data.results||[];
+
+    const items=raw.filter(i=>{
+      const d=Math.abs(parseFloat(i.variance_cost||i.variance_value||i.variance_dollars||i.cost_variance||0));
+      return d>=minVar;
+    }).map(i=>({
+      venue:venue||i.location||i.location_name||i.venue||i.establishment_name||'Unknown',
+      item_name:i.name||i.product_name||i.item_name||'Unknown',
+      sku:i.sku||i.product_id||i.upc||'',
+      variance_dollars:parseFloat(i.variance_cost||i.variance_value||i.variance_dollars||i.cost_variance||0),
+      variance_pct:parseFloat(i.variance_percentage||i.variance_pct||i.pct_variance||0),
+      category:i.category||i.cost_category||i.group||''
+    }));
+
+    S.craftData=items;S.lastPull=new Date().toISOString();sv();
+    crossRef();
+    showCR(true,`&#10003; Pulled ${items.length} variance item(s). Last pull: ${new Date().toLocaleTimeString()}`);
+    renderXRef();
+  }catch(e){
+    showCR(false,`Error: ${e.message}<br><br>Options:<br>• Run API Explorer first to discover endpoints<br>• Use "Import CSV" to upload a Craftable export<br>• Check CORS — the Craftable API may need to whitelist your domain`);
+  }
+}
+
+function showCR(ok,html){const el=document.getElementById('cRes');el.className='result '+(ok?'ok':'err');el.innerHTML=html;el.style.display='block'}
+
+// ═══════════════════════════════════════════════════
+//  CRAFTABLE — CSV Import
+// ═══════════════════════════════════════════════════
+function importCSV(ev){
+  const file=ev.target.files[0];if(!file)return;
+  const reader=new FileReader();
+  reader.onload=function(e){
+    try{
+      const lines=e.target.result.split('\n').map(l=>l.trim()).filter(l=>l);
+      if(lines.length<2)throw new Error('File too short');
+      const hdrs=csvLine(lines[0]).map(h=>h.toLowerCase().trim());
+      const nI=hdrs.findIndex(h=>h.includes('product')||h.includes('item')||h.includes('name'));
+      const vI=hdrs.findIndex(h=>(h.includes('variance')||h.includes('cost'))&&h.includes('$'));
+      const vpI=hdrs.findIndex(h=>h.includes('variance')&&h.includes('%'));
+      const cI=hdrs.findIndex(h=>h.includes('categor'));
+      const sI=hdrs.findIndex(h=>h.includes('store')||h.includes('venue')||h.includes('location'));
+      const skI=hdrs.findIndex(h=>h.includes('sku'));
+      if(nI<0)throw new Error('No product/item name column found');
+      const minV=parseFloat(document.getElementById('cMin').value)||50;
+      const items=[];
+      for(let i=1;i<lines.length;i++){
+        const c=csvLine(lines[i]);
+        const vd=vI>=0?parseFloat(String(c[vI]).replace(/[$,]/g,''))||0:0;
+        if(Math.abs(vd)<minV&&vI>=0)continue;
+        items.push({venue:sI>=0?c[sI]||'':document.getElementById('cVen').value||'Unknown',item_name:c[nI]||'',sku:skI>=0?c[skI]||'':'',variance_dollars:vd,variance_pct:vpI>=0?parseFloat(String(c[vpI]).replace(/%/g,''))||0:0,category:cI>=0?c[cI]||'':''});
+      }
+      S.craftData=items;S.lastPull=new Date().toISOString();sv();crossRef();showCR(true,`&#10003; Imported ${items.length} items.`);renderXRef();
+    }catch(err){showCR(false,'Import error: '+err.message)}
+  };
+  reader.readAsText(file);ev.target.value='';
+}
+function csvLine(l){const r=[];let c='',q=false;for(let i=0;i<l.length;i++){const ch=l[i];if(ch==='"'){q=!q;continue}if(ch===','&&!q){r.push(c);c='';continue}c+=ch}r.push(c);return r}
+
+// ═══════════════════════════════════════════════════
+//  AUTOMATION — Scheduled pulls
+// ═══════════════════════════════════════════════════
+let autoTimer=null;
+function setupAutoPull(){
+  if(autoTimer){clearInterval(autoTimer);autoTimer=null}
+  const ind=document.getElementById('autoInd');const lbl=document.getElementById('autoLabel');
+  if(S.interval>0&&S.apiKey&&S.endpoints.variance){
+    autoTimer=setInterval(()=>{pullCraftable()},S.interval*60*1000);
+    ind.className='auto-indicator running';lbl.textContent=`Auto: ${S.interval}m`;
+  }else{ind.className='auto-indicator stopped';lbl.textContent='Auto: Off'}
+}
+
+// ═══════════════════════════════════════════════════
+//  GPT-4o-mini via GitHub Models
+// ═══════════════════════════════════════════════════
+async function parseWithAI(text,venue){
+  const sysPrompt=`You are an inventory issue parser for "${venue}" (H.Wood Group).
+Extract ALL inventory issues. Return ONLY valid JSON array — no markdown, no explanation.
+Each object: { "item_name": string, "sku": string|null, "issue_type": "Missing"|"Damaged"|"No Sticker"|"Product not in Craftable"|"Product not scanning"|"Scans as different item"|"Unknown variance"|"Quantity mismatch"|"Other", "quantity": number|null, "location": string|null, "notes": string (max 120 chars) }
+Combine duplicates. If none found, return [].`;
+  const res=await fetch('https://models.inference.ai.azure.com/chat/completions',{
+    method:'POST',
+    headers:{'Content-Type':'application/json','Authorization':'Bearer '+S.githubPat},
+    body:JSON.stringify({model:'gpt-4o-mini',temperature:0.15,messages:[{role:'system',content:sysPrompt},{role:'user',content:text}]})
+  });
+  if(!res.ok){const t=await res.text();throw new Error(`GitHub Models API ${res.status}: ${t.slice(0,200)}`)}
+  const d=await res.json();
+  const raw=d.choices[0].message.content.trim();
+  return JSON.parse(raw.replace(/```json|```/g,'').trim());
+}
+
+// ═══════════════════════════════════════════════════
+//  SCORING
+// ═══════════════════════════════════════════════════
+function scoreSev(i){
+  const w=i.weeks_flagged||1,v=Math.abs(i.variance_dollars||0),a=i.still_active!==false;
+  if(a&&w>=15)return'CRITICAL';if(a&&w>=10)return'CRITICAL';if(a&&w>=5&&v>=200)return'CRITICAL';
+  if(!a&&w>=5&&v>=500)return'HIGH';if(a&&w>=5)return'HIGH';
+  if(a&&w>=3)return'MEDIUM';if(a&&v>=S.threshD)return'MEDIUM';
+  if(a&&w>=2)return'WATCH';if(!a&&v>=200)return'LOW';return'LOW';
+}
+function needsRC(i){const s=i.severity,v=Math.abs(i.variance_dollars||0),w=i.weeks_flagged||1;if(s==='CRITICAL'||s==='HIGH')return true;if(s==='MEDIUM'&&(v>=S.threshD||w>=S.threshW))return true;return false}
+function normalize(s){return(s||'').toLowerCase().replace(/[^a-z0-9]/g,'')}
+function sevOrd(s){return{CRITICAL:0,HIGH:1,MEDIUM:2,WATCH:3,LOW:4}[s]??5}
+function weekLabel(){const n=new Date(),d=n.getDay(),b=d===0?6:d-1,m=new Date(n);m.setDate(n.getDate()-b);return`Week ${m.getFullYear()}-${String(m.getMonth()+1).padStart(2,'0')}-${String(m.getDate()).padStart(2,'0')}`}
+
+// ═══════════════════════════════════════════════════
+//  CROSS-REFERENCE
+// ═══════════════════════════════════════════════════
+function similarity(a,b){if(a===b)return 1;if(!a||!b)return 0;const sA=new Set(a.split('')),sB=new Set(b.split(''));let o=0;sA.forEach(c=>{if(sB.has(c))o++});const s=(2*o)/(sA.size+sB.size);if(a.includes(b)||b.includes(a))return Math.max(s,0.9);return s}
+
+function crossRef(){
+  if(!S.craftData.length)return;
+  for(const item of S.items){
+    const nn=normalize(item.item_name);let best=null,bs=0;
+    for(const cv of S.craftData){
+      const vnMatch=!item.venue||!cv.venue||normalize(item.venue)===normalize(cv.venue);
+      if(!vnMatch)continue;
+      const sc=similarity(nn,normalize(cv.item_name));
+      if(sc>bs&&sc>=0.6){bs=sc;best=cv}
+    }
+    if(best){item.variance_dollars=best.variance_dollars;item.variance_pct=best.variance_pct;item.craftable_match=best.item_name;item.craftable_status=bs>=0.85?'YES — In Craftable':'REVIEW — Low Confidence';item.category=best.category||item.category}
+    else{item.craftable_status=item.craftable_status||'NOT IN CRAFTABLE'}
+    item.severity=scoreSev(item);item.recount=needsRC(item);
+  }
+  S.items.sort((a,b)=>sevOrd(a.severity)-sevOrd(b.severity));sv();updateBadge();
+}
+
+// ═══════════════════════════════════════════════════
+//  PARSE HANDLER
+// ═══════════════════════════════════════════════════
+async function handleParse(){
+  const venue=document.getElementById('locSel').value,msg=document.getElementById('msgIn').value;
+  const btn=document.getElementById('parseBtn'),res=document.getElementById('parseRes');
+  if(!venue){showRes(res,false,'Select a venue.');return}if(!msg.trim()){showRes(res,false,'Paste messages.');return}
+  if(!S.githubPat){showRes(res,false,'Add your GitHub token in Settings.');return}
+  btn.disabled=true;btn.innerHTML='<span class="spin">⟳</span> Parsing...';res.style.display='none';
+  try{
+    const issues=await parseWithAI(msg,venue);
+    if(!issues||!issues.length){showRes(res,false,'No issues found.');return}
+    const now=new Date().toLocaleString(),wk=weekLabel();
+    for(const iss of issues){
+      const key=`${normalize(venue)}|${normalize(iss.item_name)}`;
+      const idx=S.items.findIndex(i=>`${normalize(i.venue)}|${normalize(i.item_name)}`===key);
+      const obj={venue,item_name:iss.item_name,sku:iss.sku||'',issue_type:iss.issue_type||'',sub_location:iss.location||'',quantity:iss.quantity||0,notes:iss.notes||'',variance_dollars:0,variance_pct:0,craftable_match:'',craftable_status:'',weeks_flagged:1,repeat_status:'NEW',still_active:true,severity:'',recount:false,timestamp:now,week:wk,category:''};
+      if(idx>=0){const old=S.items[idx];obj.weeks_flagged=(old.weeks_flagged||1)+1;obj.variance_dollars=old.variance_dollars||0;obj.variance_pct=old.variance_pct||0;obj.craftable_match=old.craftable_match||'';obj.craftable_status=old.craftable_status||'';obj.category=old.category||'';obj.repeat_status=obj.weeks_flagged>=15?'CHRONIC (15+)':obj.weeks_flagged>=10?'PERSISTENT (10-14)':obj.weeks_flagged>=5?'RECURRING (5-9)':obj.weeks_flagged>=2?'REPEATING (2-4)':'NEW';S.items[idx]=obj}else{S.items.push(obj)}
+    }
+    crossRef();
+    let html=`&#10003; ${issues.length} item(s) for ${esc(venue)}<div class="issue-cards">`;
+    issues.forEach(i=>{const f=S.items.find(x=>normalize(x.venue)===normalize(venue)&&normalize(x.item_name)===normalize(i.item_name));html+=`<div class="ic"><div><div class="nm">${esc(i.item_name)}</div><div class="mt">${esc(i.issue_type||'')} ${i.quantity?'· '+i.quantity+' btl':''}${i.location?' · '+esc(i.location):''}</div></div><span class="sev sev-${f?f.severity:'LOW'}">${f?f.severity:'LOW'}</span></div>`});
+    html+='</div>';showRes(res,true,html);document.getElementById('msgIn').value='';
+  }catch(e){showRes(res,false,'Error: '+e.message)}
+  finally{btn.disabled=false;btn.textContent='Parse & Add Issues'}
+}
+
+function showRes(el,ok,html){el.className='result '+(ok?'ok':'err');el.innerHTML=html;el.style.display='block'}
+
+// ═══════════════════════════════════════════════════
+//  CROSS-REF TABLE
+// ═══════════════════════════════════════════════════
+function renderXRef(){
+  const c=document.getElementById('xrefTbl');
+  if(!S.craftData.length&&!S.items.length){c.innerHTML='<div class="empty"><span class="ico">&#128202;</span>No data. Pull from Craftable or import CSV.</div>';return}
+  const rows=[];
+  for(const cv of S.craftData){
+    const m=S.items.find(i=>normalize(i.venue)===normalize(cv.venue)&&(normalize(i.item_name)===normalize(cv.item_name)||normalize(i.craftable_match)===normalize(cv.item_name)));
+    rows.push({venue:cv.venue,product:cv.item_name,vd:cv.variance_dollars,vp:cv.variance_pct,cat:cv.category,issue:m?m.issue_type:'',wks:m?m.weeks_flagged:0,sev:m?m.severity:(Math.abs(cv.variance_dollars)>=500?'HIGH':Math.abs(cv.variance_dollars)>=200?'MEDIUM':'LOW'),rc:m?m.recount:Math.abs(cv.variance_dollars)>=S.threshD,status:m?m.craftable_status:'Craftable Only'})}
+  let html='<div class="tbl-wrap"><table><thead><tr>';
+  ['Venue','Product','Variance $','Var %','Category','Issue','Wks','Severity','Recount?'].forEach(h=>html+=`<th>${h}</th>`);
+  html+='</tr></thead><tbody>';
+  rows.forEach(r=>{const vc=r.vd<0?'vn':r.vd>0?'vp':'';html+=`<tr><td>${esc(r.venue)}</td><td>${esc(r.product)}</td><td class="num ${vc}">${fD(r.vd)}</td><td class="num">${r.vp?r.vp.toFixed(1)+'%':'—'}</td><td style="font-size:10px">${esc(r.cat)}</td><td style="font-size:10px">${esc(r.issue)}</td><td class="num">${r.wks||'—'}</td><td><span class="sev sev-${r.sev}">${r.sev}</span></td><td>${r.rc?'<span class="recount-flag">RECOUNT</span>':'<span class="no-rc">—</span>'}</td></tr>`});
+  html+='</tbody></table></div>';c.innerHTML=html;
+}
+
+// ═══════════════════════════════════════════════════
+//  RECOUNT TABLE
+// ═══════════════════════════════════════════════════
+let sC=-1,sA=true;
+function renderData(){
+  const fv=document.getElementById('fVen').value,fs=document.getElementById('fSev').value,fr=document.getElementById('fRc').value;
+  let data=S.items.filter(i=>{if(fv&&i.venue!==fv)return false;if(fs&&i.severity!==fs)return false;if(fr==='yes'&&!i.recount)return false;if(fr==='no'&&i.recount)return false;return true});
+  const tot=data.length,rc=data.filter(i=>i.recount).length,cr=data.filter(i=>i.severity==='CRITICAL').length,tv=data.reduce((s,i)=>s+Math.abs(i.variance_dollars||0),0);
+  document.getElementById('statsBar').innerHTML=`<div class="stat"><div class="n">${tot}</div><div class="l">Total</div></div><div class="stat"><div class="n" style="color:var(--critical)">${rc}</div><div class="l">Recount</div></div><div class="stat"><div class="n" style="color:var(--critical)">${cr}</div><div class="l">Critical</div></div><div class="stat"><div class="n">${fD(tv)}</div><div class="l">Variance</div></div>`;
+  const c=document.getElementById('dataTbl');
+  if(!data.length){c.innerHTML='<div class="empty"><span class="ico">&#128203;</span>No items match filters.</div>';return}
+  const cols=[{k:'venue',l:'Venue'},{k:'item_name',l:'Product'},{k:'issue_type',l:'Issue'},{k:'sub_location',l:'Location'},{k:'quantity',l:'Qty',n:1},{k:'variance_dollars',l:'Var $',n:1},{k:'weeks_flagged',l:'Wks',n:1},{k:'severity',l:'Severity'},{k:'recount',l:'Recount?'},{k:'notes',l:'Notes'}];
+  let html='<div class="tbl-wrap"><table><thead><tr>';
+  cols.forEach((c,i)=>html+=`<th onclick="sortBy(${i})" class="${sC===i?'sorted':''}">${c.l}<span class="sa">${sC===i?(sA?'▲':'▼'):'↕'}</span></th>`);
+  html+='</tr></thead><tbody>';
+  data.forEach(item=>{const vc=item.variance_dollars<0?'vn':item.variance_dollars>0?'vp':'';html+=`<tr><td>${esc(item.venue)}</td><td><strong>${esc(item.item_name)}</strong>${item.craftable_status?`<div style="font-size:9px;color:var(--text-muted);margin-top:1px">${esc(item.craftable_status)}</div>`:''}</td><td style="font-size:10px">${esc(item.issue_type)}</td><td style="font-size:10px">${esc(item.sub_location)}</td><td class="num">${item.quantity||'—'}</td><td class="num ${vc}">${item.variance_dollars?fD(item.variance_dollars):'—'}</td><td class="num">${item.weeks_flagged}</td><td><span class="sev sev-${item.severity}">${item.severity}</span></td><td>${item.recount?'<span class="recount-flag">RECOUNT</span>':'<span class="no-rc">—</span>'}</td><td style="font-size:10px;max-width:140px;overflow:hidden;text-overflow:ellipsis">${esc(item.notes)}</td></tr>`});
+  html+='</tbody></table></div>';c.innerHTML=html;
+}
+function sortBy(ci){if(sC===ci)sA=!sA;else{sC=ci;sA=true}const ks=['venue','item_name','issue_type','sub_location','quantity','variance_dollars','weeks_flagged','severity','recount','notes'];const k=ks[ci];S.items.sort((a,b)=>{let va=a[k],vb=b[k];if(k==='severity'){va=sevOrd(va);vb=sevOrd(vb)}if(typeof va==='number'&&typeof vb==='number')return sA?va-vb:vb-va;va=String(va||'').toLowerCase();vb=String(vb||'').toLowerCase();return sA?va.localeCompare(vb):vb.localeCompare(va)});sv();renderData()}
+
+// ═══════════════════════════════════════════════════
+//  CSV EXPORT
+// ═══════════════════════════════════════════════════
+function exportCSV(type){
+  const fv=document.getElementById('fVen').value;
+  let data=S.items;if(fv)data=data.filter(i=>i.venue===fv);if(type==='recount')data=data.filter(i=>i.recount);
+  if(!data.length){toast('No data');return}
+  let hdrs,fn;
+  if(type==='recount'){
+    hdrs=['Venue','Product','Issue Type','Location in Venue','Qty Short','Variance ($)','Weeks Flagged','Severity','Craftable Status','Notes','Action Required'];
+    fn=i=>[i.venue,i.item_name,i.issue_type,i.sub_location,i.quantity||'',i.variance_dollars?'$'+Math.abs(i.variance_dollars).toFixed(2):'',i.weeks_flagged,i.severity,i.craftable_status||'—',i.notes,'RECOUNT — Verify physical count vs Craftable'];
+  }else{
+    hdrs=['Venue','Product','SKU','Issue Type','Location in Venue','Qty','Variance ($)','Variance %','Category','Weeks Flagged','Repeat Status','Severity','Recount?','Craftable Match','Craftable Status','Notes','Week','Timestamp'];
+    fn=i=>[i.venue,i.item_name,i.sku,i.issue_type,i.sub_location,i.quantity||'',i.variance_dollars||'',i.variance_pct?i.variance_pct.toFixed(1)+'%':'',i.category,i.weeks_flagged,i.repeat_status,i.severity,i.recount?'YES':'NO',i.craftable_match,i.craftable_status,i.notes,i.week,i.timestamp];
+  }
+  let csv='\uFEFF'+hdrs.map(h=>`"${h}"`).join(',')+'\n';
+  data.forEach(i=>{csv+=fn(i).map(c=>`"${String(c||'').replace(/"/g,'""')}"`).join(',')+'\n'});
+  if(type==='recount'){
+    csv+='\n"SUMMARY"\n';
+    csv+=`"Total recount items:","${data.length}"\n`;
+    csv+=`"Critical:","${data.filter(i=>i.severity==='CRITICAL').length}"\n`;
+    csv+=`"High:","${data.filter(i=>i.severity==='HIGH').length}"\n`;
+    csv+=`"Total variance:","$${data.reduce((s,i)=>s+Math.abs(i.variance_dollars||0),0).toFixed(2)}"\n`;
+    csv+=`"Generated:","${new Date().toLocaleString()}"\n`;
+    csv+='\n"BY VENUE"\n';
+    [...new Set(data.map(i=>i.venue))].forEach(v=>{const vi=data.filter(i=>i.venue===v);csv+=`"${v}","${vi.length} items","$${vi.reduce((s,i)=>s+Math.abs(i.variance_dollars||0),0).toFixed(2)}"\n`});
+  }
+  const blob=new Blob([csv],{type:'text/csv;charset=utf-8'});const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=type==='recount'?`RECOUNT_${weekLabel().replace(/\s/g,'_')}.csv`:`inventory_full_${weekLabel().replace(/\s/g,'_')}.csv`;a.click();URL.revokeObjectURL(url);
+  toast(type==='recount'?'Recount CSV downloaded':'Full CSV downloaded');
+}
+function clearAll(){if(!confirm('Clear all data?'))return;S.items=[];S.craftData=[];sv();renderData();updateBadge();toast('Cleared')}
+
+// ═══════════════════════════════════════════════════
+//  HELPERS
+// ═══════════════════════════════════════════════════
+function fD(n){if(!n&&n!==0)return'—';const a=Math.abs(n),s='$'+a.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});return n<0?'-'+s:s}
+function esc(s){const d=document.createElement('div');d.textContent=s||'';return d.innerHTML}
+function toast(m){const el=document.createElement('div');el.className='toast';el.textContent=m;document.body.appendChild(el);setTimeout(()=>el.remove(),3000)}
+function updateBadge(){document.getElementById('cBadge').textContent=S.items.filter(i=>i.recount).length}
+
+// INIT
+renderVS();renderSettings();updateBadge();setupAutoPull();
+</script>
+</body>
+</html>
