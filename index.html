@@ -254,8 +254,8 @@ Sarah: 2x Hendrick's Gin unaccounted, walk-in"></textarea>
       </div>
       <div style="display:flex;gap:8px;margin-top:8px">
         <button class="btn" onclick="pullCraftable()">Pull Current Variance</button>
-        <button class="btn-s" onclick="document.getElementById('cFile').click()">Import CSV</button>
-        <input type="file" id="cFile" accept=".csv,.xlsx" style="display:none" onchange="importCSV(event)">
+        <button class="btn-s" onclick="document.getElementById('cFile').click()">Import Craftable Export</button>
+        <input type="file" id="cFile" accept=".csv,.xlsx,.xls" style="display:none" onchange="importCSV(event)">
       </div>
       <div id="cPeriodInfo" style="margin-top:10px;font-size:10px;color:var(--dim);display:none"></div>
     </div>
@@ -675,65 +675,196 @@ async function pullCraftable(){
 function showCR(ok,html){const el=document.getElementById('cRes');el.className='result '+(ok?'ok':'err');el.innerHTML=html;el.style.display='block'}
 
 // ═══════════════════════════════════════════════════
-//  CRAFTABLE — CSV Import (AVT export format)
+//  CRAFTABLE — Import AVT Export (XLSX or CSV)
 // ═══════════════════════════════════════════════════
 function importCSV(ev){
   const file=ev.target.files[0];if(!file)return;
-  const reader=new FileReader();
-  reader.onload=function(e){
-    try{
-      const lines=e.target.result.split('\n').map(l=>l.trim()).filter(l=>l);
-      if(lines.length<2)throw new Error('File too short');
-      const hdrs=csvLine(lines[0]).map(h=>h.toLowerCase().trim());
 
-      // Map Craftable AVT export columns
-      const col=(keywords)=>hdrs.findIndex(h=>keywords.some(k=>h.includes(k)));
-      const nI=col(['product','item','name','description']);
-      const vI=col(['variance amt','variance_amt','variance amount','variance $','variance_cost','cost_variance']);
-      const vpI=col(['variance %','variance_pct','variance_percent']);
-      const cI=col(['category','cat']);
-      const sI=col(['store','venue','location','establishment']);
-      const skI=col(['sku','upc','product_id','item_id']);
-      const actI=col(['actual amount','actual_amount','actual cost','actual']);
-      const theoI=col(['theo amount','theo_amount','theoretical','expected']);
-      const startI=col(['starting inventory','starting_inventory','opening']);
-      const purI=col(['purchases','received']);
-      const depI=col(['depletions','usage','sold']);
+  // Handle XLSX files using SheetJS
+  if(file.name.endsWith('.xlsx')||file.name.endsWith('.xls')){
+    const reader=new FileReader();
+    reader.onload=function(e){
+      try{
+        // Load SheetJS dynamically if not loaded
+        if(typeof XLSX==='undefined'){
+          showCR(false,'<span class="spin">⟳</span> Loading XLSX parser...');
+          document.getElementById('cRes').style.display='block';
+          const s=document.createElement('script');
+          s.src='https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
+          s.onload=()=>processXLSX(e.target.result);
+          s.onerror=()=>showCR(false,'Failed to load XLSX parser. Try saving as CSV from Craftable instead.');
+          document.head.appendChild(s);
+        }else{processXLSX(e.target.result)}
+      }catch(err){showCR(false,'Import error: '+err.message)}
+    };
+    reader.readAsArrayBuffer(file);
+  }else{
+    // CSV fallback
+    const reader=new FileReader();
+    reader.onload=function(e){processCSVText(e.target.result)};
+    reader.readAsText(file);
+  }
+  ev.target.value='';
+}
 
-      if(nI<0)throw new Error('No product/item name column found. Columns detected: '+hdrs.filter(h=>h).join(', '));
-      const minV=parseFloat(document.getElementById('cMin').value)||50;
-      const items=[];
-      for(let i=1;i<lines.length;i++){
-        const c=csvLine(lines[i]);
-        const vd=vI>=0?parseFloat(String(c[vI]).replace(/[$,]/g,''))||0:0;
-        if(Math.abs(vd)<minV&&vI>=0)continue;
-        items.push({
-          venue:sI>=0?c[sI]||'':document.getElementById('cVen').value||'Unknown',
-          item_name:c[nI]||'',
-          sku:skI>=0?c[skI]||'':'',
-          variance_dollars:vd,
-          variance_pct:vpI>=0?parseFloat(String(c[vpI]).replace(/%/g,''))||0:0,
-          category:cI>=0?c[cI]||'':'',
-          actual_amount:actI>=0?parseFloat(String(c[actI]).replace(/[$,]/g,''))||0:0,
-          theo_amount:theoI>=0?parseFloat(String(c[theoI]).replace(/[$,]/g,''))||0:0,
-          starting_inventory:startI>=0?parseFloat(String(c[startI]).replace(/[$,]/g,''))||0:0,
-          purchases:purI>=0?parseFloat(String(c[purI]).replace(/[$,]/g,''))||0:0,
-          depletions:depI>=0?parseFloat(String(c[depI]).replace(/[$,]/g,''))||0:0,
-          period:'imported'
-        });
+function processXLSX(data){
+  try{
+    const wb=XLSX.read(data,{type:'array'});
+    const ws=wb.Sheets[wb.SheetNames[0]];
+    const rows=XLSX.utils.sheet_to_json(ws,{header:1,defval:''});
+
+    // Find the header row — look for row containing "ITEM" or "STORE"
+    let headerIdx=-1;
+    for(let i=0;i<Math.min(15,rows.length);i++){
+      const row=rows[i].map(c=>String(c).trim().toUpperCase());
+      if(row.includes('ITEM')||row.includes('PRODUCT')||row.some(c=>c.includes('ITEM'))){headerIdx=i;break}
+    }
+    if(headerIdx<0)throw new Error('Could not find column headers. Expected a row with ITEM or PRODUCT.');
+
+    const hdrs=rows[headerIdx].map(c=>String(c).trim().toLowerCase().replace(/\s+/g,' '));
+    const dataRows=rows.slice(headerIdx+1);
+
+    // Map Craftable AVT Qty Details columns
+    const ci=(keywords)=>hdrs.findIndex(h=>keywords.some(k=>h.includes(k)));
+    const C={
+      store:ci(['store']),
+      id:ci(['id']),
+      item:ci(['item','product','name']),
+      cat:ci(['category','cat']),
+      start:ci(['start']),
+      purch:ci(['purchase']),
+      trans:ci(['transfer']),
+      depl:ci(['depletion']),
+      waste:ci(['waste']),
+      actual:ci(['actual inventory','actual']),
+      theo:ci(['theo inventory','theo']),
+      variance:ci(['variance']),
+      varPctAct:ci(['variance % actual','variance %']),
+      varPctDepl:ci(['variance % depletion']),
+      varValue:ci(['variance value']),
+      cuPrice:ci(['cu price','price','cost per unit','unit cost']),
+    };
+
+    if(C.item<0)throw new Error('No ITEM column found. Headers: '+hdrs.filter(h=>h).join(', '));
+
+    const minV=parseFloat(document.getElementById('cMin').value)||50;
+    const catFilter=document.getElementById('cCat').value;
+    const items=[];
+    let lastStore='';
+
+    for(const row of dataRows){
+      // Forward-fill store name (Craftable only puts it on first row of each store group)
+      const rawStore=String(row[C.store]||'').trim();
+      if(rawStore)lastStore=rawStore;
+      const store=lastStore||document.getElementById('cVen').value||'Unknown';
+
+      const itemName=String(row[C.item]||'').trim();
+      if(!itemName)continue;
+
+      const category=C.cat>=0?String(row[C.cat]||'').trim():'';
+      if(catFilter&&!category.includes(catFilter))continue;
+
+      const num=(idx)=>idx>=0?parseFloat(String(row[idx]).replace(/[$,]/g,''))||0:0;
+
+      const varValue=num(C.varValue);
+      const variance=num(C.variance);
+      // Use variance value ($) for filtering, fall back to qty variance * price
+      const varDollars=varValue||0;
+
+      if(Math.abs(varDollars)<minV&&C.varValue>=0)continue;
+
+      items.push({
+        venue:store,
+        item_name:itemName,
+        sku:C.id>=0?String(row[C.id]||'').trim():'',
+        variance_dollars:varDollars,
+        variance_pct:num(C.varPctAct),
+        category,
+        actual_amount:num(C.actual),
+        theo_amount:num(C.theo),
+        starting_inventory:num(C.start),
+        purchases:num(C.purch),
+        depletions:num(C.depl),
+        waste:num(C.waste),
+        cu_price:num(C.cuPrice),
+        variance_qty:variance,
+        period:'imported'
+      });
+    }
+
+    const stores=[...new Set(items.map(i=>i.venue).filter(v=>v&&v!=='Unknown'))];
+    for(const ds of stores){if(!S.venues.some(v=>normalize(v)===normalize(ds))){S.venues.push(ds)}}
+    renderVS();
+
+    S.craftData=items;S.lastPull=new Date().toISOString();sv();crossRef();
+    showCR(true,`&#10003; Imported ${items.length} variance items from ${stores.join(', ')||'file'} (${dataRows.length} total rows scanned, ${items.length} above $${minV} threshold).`);
+    renderXRef();
+  }catch(err){showCR(false,'XLSX import error: '+err.message)}
+}
+
+function processCSVText(text){
+  try{
+    const allLines=text.split('\n').map(l=>l.trim()).filter(l=>l);
+
+    // Find header row — skip title/metadata rows
+    let headerIdx=0;
+    for(let i=0;i<Math.min(15,allLines.length);i++){
+      const upper=allLines[i].toUpperCase();
+      if(upper.includes('ITEM')||upper.includes('PRODUCT')||upper.includes('STORE')){
+        const cols=csvLine(allLines[i]);
+        if(cols.length>=5){headerIdx=i;break}
       }
+    }
 
-      // Auto-detect stores
-      const stores=[...new Set(items.map(i=>i.venue).filter(v=>v&&v!=='Unknown'))];
-      for(const ds of stores){if(!S.venues.some(v=>normalize(v)===normalize(ds))){S.venues.push(ds)}}
-      renderVS();
+    const hdrs=csvLine(allLines[headerIdx]).map(h=>h.toLowerCase().trim().replace(/\s+/g,' '));
+    const col=(keywords)=>hdrs.findIndex(h=>keywords.some(k=>h.includes(k)));
+    const nI=col(['item','product','name','description']);
+    const vI=col(['variance value','variance amt','variance $','cost_variance']);
+    const vpI=col(['variance %','variance_pct']);
+    const cI=col(['category','cat']);
+    const sI=col(['store','venue','location']);
+    const skI=col(['sku','upc','id']);
+    const actI=col(['actual inventory','actual amount','actual']);
+    const theoI=col(['theo inventory','theo amount','theo']);
+    const startI=col(['start']);
+    const purI=col(['purchase']);
+    const depI=col(['depletion']);
+    const prI=col(['cu price','price','unit cost']);
+    const varQI=col(['variance']);
 
-      S.craftData=items;S.lastPull=new Date().toISOString();sv();crossRef();
-      showCR(true,`&#10003; Imported ${items.length} items${stores.length?' from '+stores.join(', '):''}.`);
-      renderXRef();
-    }catch(err){showCR(false,'Import error: '+err.message)}
-  };
-  reader.readAsText(file);ev.target.value='';
+    if(nI<0)throw new Error('No ITEM column found. Headers: '+hdrs.filter(h=>h).join(', '));
+    const minV=parseFloat(document.getElementById('cMin').value)||50;
+    const items=[];
+    let lastStore='';
+
+    for(let i=headerIdx+1;i<allLines.length;i++){
+      const c=csvLine(allLines[i]);
+      const rawStore=sI>=0?String(c[sI]||'').trim():'';
+      if(rawStore)lastStore=rawStore;
+
+      const itemName=nI>=0?String(c[nI]||'').trim():'';
+      if(!itemName)continue;
+
+      const num=(idx)=>idx>=0?parseFloat(String(c[idx]).replace(/[$,%]/g,''))||0:0;
+      const vd=num(vI);
+      if(Math.abs(vd)<minV&&vI>=0)continue;
+
+      items.push({
+        venue:lastStore||document.getElementById('cVen').value||'Unknown',
+        item_name:itemName,sku:skI>=0?String(c[skI]||'').trim():'',
+        variance_dollars:vd,variance_pct:num(vpI),category:cI>=0?String(c[cI]||'').trim():'',
+        actual_amount:num(actI),theo_amount:num(theoI),starting_inventory:num(startI),
+        purchases:num(purI),depletions:num(depI),cu_price:num(prI),variance_qty:num(varQI),
+        period:'imported'
+      });
+    }
+    const stores=[...new Set(items.map(i=>i.venue).filter(v=>v&&v!=='Unknown'))];
+    for(const ds of stores){if(!S.venues.some(v=>normalize(v)===normalize(ds))){S.venues.push(ds)}}
+    renderVS();
+    S.craftData=items;S.lastPull=new Date().toISOString();sv();crossRef();
+    showCR(true,`&#10003; Imported ${items.length} items${stores.length?' from '+stores.join(', '):''}.`);
+    renderXRef();
+  }catch(err){showCR(false,'CSV import error: '+err.message)}
 }
 function csvLine(l){const r=[];let c='',q=false;for(let i=0;i<l.length;i++){const ch=l[i];if(ch==='"'){q=!q;continue}if(ch===','&&!q){r.push(c);c='';continue}c+=ch}r.push(c);return r}
 
