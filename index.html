@@ -885,44 +885,44 @@ function setupAutoPull(){
 //  GPT-4o-mini via GitHub Models
 // ═══════════════════════════════════════════════════
 async function parseWithAI(text,venue){
-  const sysPrompt=`You are an inventory issue parser for "${venue}" (H.Wood Group bar/restaurant).
+  const sysPrompt=`You are an inventory issue parser for "${venue}" (H.Wood Group).
 
-TASK: Extract ALL inventory issues where you can identify the PRODUCT NAME from the text. Return ONLY a valid JSON array.
+Parse these Slack messages and extract EVERY inventory issue you can find. Be thorough — extract ALL items mentioned by name, even casually. Return a JSON array.
 
-RULES:
-1. EXTRACT any item where the product/brand name is written in the text, even if mentioned casually.
-   Examples of text that SHOULD produce items:
-   - "coconut wash stranahans batch not in Craftable x2 bottles 750ml" → item: "Coconut Wash Stranahans Batch 750ml"
-   - "Aqua Panna -298 cases" → item: "Aqua Panna"  
-   - "Francois Carillon Chassagne Montrachet 2023 750ml didn't stick" → item: "Francois Carillon Chassagne Montrachet 2023 750ml"
-   - "How many bottles of the Vocal Vineyards Pinot Noir 2022 750ml" → item: "Vocal Vineyards Pinot Noir 2022 750ml"
-   - "moet 375ml rose did enter into Craftable" → item: "Moet Rose 375ml"
-   - "peach Red Bull 8.4oz not in Craftable" → item: "Peach Red Bull 8.4oz"
-   - "Remy Martin 1738 750ml doesnt scan" → item: "Remy Martin 1738 750ml"
-   - "Kari vodka 360ml not on craftable" → item: "Kari Vodka 360ml"
+For each issue found:
+{ "item_name": "Full product name with size", "sku": null, "issue_type": "Missing"|"Damaged"|"No Sticker"|"Product not in Craftable"|"Product not scanning"|"Scans as different item"|"Unknown variance"|"Quantity mismatch"|"Mislabeled"|"Other", "quantity": number|null, "location": "where in venue"|null, "notes": "brief description max 120 chars" }
 
-2. SKIP messages where the product is ONLY in a photo/image and the text just describes a location:
-   - "Wine rack B row 12 no sticker to scan" + [photo] → SKIP (no product name in text)
-   - "Bottle does not scan 750ml" + [photo] → SKIP (no product name)
-   - "Not in inventory quantity six" + [photo] → SKIP
+IMPORTANT — Be aggressive about extraction:
+- "Kari vodka 360ml not on craftable 3rd floor bev" → YES, extract "Kari Vodka 360ml"
+- "Remy Martin 1738 750ml doesnt scan 3rd floor bev" → YES, extract "Remy Martin 1738 750ml"
+- "coconut wash stranahans batch not in Craftable x2 bottles 750ml" → YES, extract "Coconut Wash Stranahans Batch 750ml"
+- "Aqua Panna" mentioned with variance → YES, extract "Aqua Panna"
+- "moet 375ml rose did enter into Craftable" → YES, extract "Moet Imperial Rose 375ml"
+- "Francois Carillon Chassagne Montrachet 2023 750ml" → YES, extract it
+- "Vocal Vineyards Pinot Noir 2022 750ml" → YES, extract it
+- "Nikka miyagiikyo 750ml doesn't scan" → YES, extract "Nikka Miyagikyo 750ml"
+- "Del maguey Pechuga 750ml doesn't scan" → YES, extract "Del Maguey Pechuga 750ml"
+- "Giffard cassis noir 750ml doesn't scan" → YES, extract "Giffard Cassis Noir 750ml"
+- "Auchentoshan 3 woods 750ml doesnt scan" → YES, extract "Auchentoshan Three Wood 750ml"
+- "Avuã cachaca 750ml doesn't scan" → YES, extract "Avua Cachaca 750ml"
+- "Dom Perignon Luminous" or "LUMINOUS variant" → YES, extract "Dom Perignon Luminous Brut 750ml"
+- "peach Red Bull 8.4oz" → YES, extract "Peach Red Bull 8.4oz"
 
-3. For item_name: Use the ACTUAL brand/product name with size. Never use locations, descriptions, or generic words.
-   BAD: "Wine rack D", "Champagne fridge", "No stickers", "Bottle", "Small liquor room"
-   GOOD: "Kari Vodka 360ml", "Dom Perignon Luminous Brut 750ml", "Coconut Wash Stranahans Batch 750ml"
+ONLY skip a message if it has NO product name at all and just describes a location with a photo reference, like:
+- "Wine rack B row 12 no sticker to scan [photo]" — no product name, skip
+- "Bottle does not scan 750ml [photo]" — no product name, skip
 
-Each object: { "item_name": string, "sku": null, "issue_type": "Missing"|"Damaged"|"No Sticker"|"Product not in Craftable"|"Product not scanning"|"Scans as different item"|"Unknown variance"|"Quantity mismatch"|"Mislabeled"|"Other", "quantity": number|null, "location": string|null, "notes": string (max 120 chars) }
-
-Combine duplicates. Return [].if none found.`;
+When in doubt, INCLUDE the item. Combine duplicates. Return [] only if truly zero products named.`;
   const res=await fetch('https://models.inference.ai.azure.com/chat/completions',{
     method:'POST',
     headers:{'Content-Type':'application/json','Authorization':'Bearer '+S.githubPat},
-    body:JSON.stringify({model:'gpt-4o-mini',temperature:0.1,messages:[{role:'system',content:sysPrompt},{role:'user',content:text}]})
+    body:JSON.stringify({model:'gpt-4o-mini',temperature:0.3,messages:[{role:'system',content:sysPrompt},{role:'user',content:text}]})
   });
   if(!res.ok){const t=await res.text();throw new Error(`GitHub Models API ${res.status}: ${t.slice(0,200)}`)}
   const d=await res.json();
   const raw=d.choices[0].message.content.trim();
   const parsed=JSON.parse(raw.replace(/```json|```/g,'').trim());
-  // Post-filter: remove any items that are clearly not product names
+  // Post-filter: remove any items that are clearly not product names (locations, descriptions, etc.)
   return parsed.filter(i=>isValidProductName(i.item_name));
 }
 
