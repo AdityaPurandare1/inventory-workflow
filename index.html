@@ -1130,11 +1130,59 @@ async function handleParse(){
   if(!hasText&&!hasImages){showRes(res,false,'Paste messages or add images.');return}
   if(!S.githubPat){showRes(res,false,'Add your GitHub token in Settings.');return}
   btn.disabled=true;
-  btn.innerHTML=hasImages?`<span class="spin">⟳</span> Parsing ${hasText?'text + ':''}${pendingImages.length} image${pendingImages.length>1?'s':''}...`:'<span class="spin">⟳</span> Parsing...';
   res.style.display='none';
+
+  const totalImages=pendingImages.length;
+  const IMG_BATCH=8; // Max images per API call to avoid payload limits
+
   try{
-    const issues=await parseWithAI(hasText?msg:'',venue,hasImages?pendingImages:null);
-    if(!issues||!issues.length){showRes(res,false,'No issues found.');return}
+    let allIssues=[];
+
+    // Step 1: Parse text (+ first batch of images if <=IMG_BATCH total)
+    if(hasText||hasImages){
+      if(hasImages && totalImages<=IMG_BATCH){
+        // Small batch — send text + all images in one call
+        btn.innerHTML=`<span class="spin">⟳</span> Parsing text + ${totalImages} images...`;
+        const issues=await parseWithAI(hasText?msg:'',venue,pendingImages);
+        allIssues.push(...(issues||[]));
+      } else {
+        // Large batch — parse text first, then images in batches
+        if(hasText){
+          btn.innerHTML=`<span class="spin">⟳</span> Parsing text...`;
+          const textIssues=await parseWithAI(msg,venue,null);
+          allIssues.push(...(textIssues||[]));
+        }
+
+        if(hasImages){
+          const batches=[];
+          for(let i=0;i<totalImages;i+=IMG_BATCH){
+            batches.push(pendingImages.slice(i,i+IMG_BATCH));
+          }
+          for(let b=0;b<batches.length;b++){
+            btn.innerHTML=`<span class="spin">⟳</span> Reading images batch ${b+1}/${batches.length} (${batches[b].length} images)...`;
+            const imgIssues=await parseWithAI('',venue,batches[b]);
+            allIssues.push(...(imgIssues||[]));
+          }
+        }
+      }
+    }
+
+    // Deduplicate by normalized item_name
+    const seen=new Map();
+    for(const iss of allIssues){
+      const key=normalize(iss.item_name);
+      if(!seen.has(key)){seen.set(key,iss)}
+      else{
+        // Merge: keep the one with more info
+        const existing=seen.get(key);
+        if(!existing.location&&iss.location)existing.location=iss.location;
+        if(!existing.quantity&&iss.quantity)existing.quantity=iss.quantity;
+        if(!existing.notes&&iss.notes)existing.notes=iss.notes;
+      }
+    }
+    const issues=[...seen.values()];
+
+    if(!issues.length){showRes(res,false,'No issues found.');return}
     const now=new Date().toLocaleString(),wk=weekLabel();
     for(const iss of issues){
       const key=`${normalize(venue)}|${normalize(iss.item_name)}`;
@@ -1143,7 +1191,7 @@ async function handleParse(){
       if(idx>=0){const old=S.items[idx];obj.weeks_flagged=(old.weeks_flagged||1)+1;obj.variance_dollars=old.variance_dollars||0;obj.variance_pct=old.variance_pct||0;obj.craftable_match=old.craftable_match||'';obj.craftable_status=old.craftable_status||'';obj.category=old.category||'';obj.repeat_status=obj.weeks_flagged>=15?'CHRONIC (15+)':obj.weeks_flagged>=10?'PERSISTENT (10-14)':obj.weeks_flagged>=5?'RECURRING (5-9)':obj.weeks_flagged>=2?'REPEATING (2-4)':'NEW';S.items[idx]=obj}else{S.items.push(obj)}
     }
     crossRef();
-    let html=`&#10003; ${issues.length} item(s) for ${esc(venue)}${hasImages?' (from text'+(pendingImages.length?' + '+pendingImages.length+' images':'')+')'  :''}<div class="issue-cards">`;
+    let html=`&#10003; ${issues.length} item(s) for ${esc(venue)}${hasImages?' (from text'+(totalImages?' + '+totalImages+' images':'')+')'  :''}<div class="issue-cards">`;
     issues.forEach(i=>{const f=S.items.find(x=>normalize(x.venue)===normalize(venue)&&normalize(x.item_name)===normalize(i.item_name));html+=`<div class="ic"><div><div class="nm">${esc(i.item_name)}</div><div class="mt">${esc(i.issue_type||'')} ${i.quantity?'· '+i.quantity+' btl':''}${i.location?' · '+esc(i.location):''}</div></div><span class="sev sev-${f?f.severity:'LOW'}">${f?f.severity:'LOW'}</span></div>`});
     html+='</div>';showRes(res,true,html);
     document.getElementById('msgIn').value='';
