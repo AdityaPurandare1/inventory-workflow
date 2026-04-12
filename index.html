@@ -920,13 +920,21 @@ function weekLabel(){const n=new Date(),d=n.getDay(),b=d===0?6:d-1,m=new Date(n)
 // ═══════════════════════════════════════════════════
 function similarity(a,b){if(a===b)return 1;if(!a||!b)return 0;const sA=new Set(a.split('')),sB=new Set(b.split(''));let o=0;sA.forEach(c=>{if(sB.has(c))o++});const s=(2*o)/(sA.size+sB.size);if(a.includes(b)||b.includes(a))return Math.max(s,0.9);return s}
 
+function venueMatch(a,b){
+  if(!a||!b)return true; // if either is empty, match anyway
+  const na=normalize(a),nb=normalize(b);
+  if(na===nb)return true;
+  if(na.includes(nb)||nb.includes(na))return true; // "birdstreetsclub" includes "birdstreet"
+  if(similarity(na,nb)>=0.7)return true;
+  return false;
+}
+
 function crossRef(){
   if(!S.craftData.length)return;
   for(const item of S.items){
     const nn=normalize(item.item_name);let best=null,bs=0;
     for(const cv of S.craftData){
-      const vnMatch=!item.venue||!cv.venue||normalize(item.venue)===normalize(cv.venue);
-      if(!vnMatch)continue;
+      if(!venueMatch(item.venue,cv.venue))continue;
       const sc=similarity(nn,normalize(cv.item_name));
       if(sc>bs&&sc>=0.6){bs=sc;best=cv}
     }
@@ -974,7 +982,7 @@ function renderXRef(){
   if(!S.craftData.length&&!S.items.length){c.innerHTML='<div class="empty"><span class="ico">&#128202;</span>No data. Pull from Craftable or import CSV.</div>';return}
   const rows=[];
   for(const cv of S.craftData){
-    const m=S.items.find(i=>normalize(i.venue)===normalize(cv.venue)&&(normalize(i.item_name)===normalize(cv.item_name)||normalize(i.craftable_match)===normalize(cv.item_name)));
+    const m=S.items.find(i=>venueMatch(i.venue,cv.venue)&&(normalize(i.item_name)===normalize(cv.item_name)||normalize(i.craftable_match)===normalize(cv.item_name)));
     rows.push({venue:cv.venue,product:cv.item_name,actual:cv.actual_amount||0,theo:cv.theo_amount||0,vd:cv.variance_dollars,vp:cv.variance_pct,cat:cv.category,issue:m?m.issue_type:'',wks:m?m.weeks_flagged:0,sev:m?m.severity:(Math.abs(cv.variance_dollars)>=500?'HIGH':Math.abs(cv.variance_dollars)>=200?'MEDIUM':'LOW'),rc:m?m.recount:Math.abs(cv.variance_dollars)>=S.threshD})}
   let html='<div class="tbl-wrap"><table><thead><tr>';
   ['Store','Product','Actual $','Theo $','Variance $','Var %','Category','Issue','Wks','Severity','Recount?'].forEach(h=>html+=`<th>${h}</th>`);
@@ -1009,15 +1017,51 @@ function sortBy(ci){if(sC===ci)sA=!sA;else{sC=ci;sA=true}const ks=['venue','item
 // ═══════════════════════════════════════════════════
 function exportCSV(type){
   const fv=document.getElementById('fVen').value;
-  let data=S.items;if(fv)data=data.filter(i=>i.venue===fv);if(type==='recount')data=data.filter(i=>i.recount);
-  if(!data.length){toast('No data');return}
+
+  // Build combined dataset: parsed items + Craftable-only items
+  let data=[...S.items];
+
+  // Add Craftable-only variance items that aren't already in S.items
+  for(const cv of S.craftData){
+    const alreadyIn=S.items.some(i=>venueMatch(i.venue,cv.venue)&&(
+      normalize(i.item_name)===normalize(cv.item_name)||normalize(i.craftable_match)===normalize(cv.item_name)
+    ));
+    if(!alreadyIn){
+      const varAbs=Math.abs(cv.variance_dollars||0);
+      const sev=varAbs>=500?'HIGH':varAbs>=200?'MEDIUM':varAbs>=100?'WATCH':'LOW';
+      const rc=sev==='HIGH'||sev==='MEDIUM'||(sev==='WATCH'&&varAbs>=S.threshD);
+      data.push({
+        venue:cv.venue,item_name:cv.item_name,sku:cv.sku||'',issue_type:'Craftable Variance',
+        sub_location:'',quantity:cv.variance_qty||0,notes:`Actual: ${cv.actual_amount}, Theo: ${cv.theo_amount}`,
+        variance_dollars:cv.variance_dollars,variance_pct:cv.variance_pct,
+        craftable_match:cv.item_name,craftable_status:'Craftable Only',
+        weeks_flagged:0,repeat_status:'',still_active:true,severity:sev,recount:rc,
+        timestamp:new Date().toLocaleString(),week:weekLabel(),category:cv.category
+      });
+    }
+  }
+
+  if(fv)data=data.filter(i=>venueMatch(i.venue,fv));
+  if(type==='recount')data=data.filter(i=>i.recount);
+
+  // Sort: CRITICAL first
+  data.sort((a,b)=>sevOrd(a.severity)-sevOrd(b.severity));
+
+  if(!data.length){toast('No recount items found. Try lowering the Min Variance threshold.');return}
   let hdrs,fn;
   if(type==='recount'){
-    hdrs=['Venue','Product','Issue Type','Location in Venue','Qty Short','Variance ($)','Weeks Flagged','Severity','Craftable Status','Notes','Action Required'];
-    fn=i=>[i.venue,i.item_name,i.issue_type,i.sub_location,i.quantity||'',i.variance_dollars?'$'+Math.abs(i.variance_dollars).toFixed(2):'',i.weeks_flagged,i.severity,i.craftable_status||'—',i.notes,'RECOUNT — Verify physical count vs Craftable'];
+    hdrs=['Store','Product','Issue Type','Location','Qty Variance','Variance ($)','Variance %','Category','Severity','Craftable Status','Notes','Action Required'];
+    fn=i=>[i.venue,i.item_name,i.issue_type||'Variance',i.sub_location||'',i.quantity||'',
+      i.variance_dollars?'$'+i.variance_dollars.toFixed(2):'',
+      i.variance_pct?i.variance_pct.toFixed(1)+'%':'',
+      i.category||'',i.severity,i.craftable_status||'',i.notes||'',
+      'RECOUNT — Verify physical count vs Craftable'];
   }else{
-    hdrs=['Venue','Product','SKU','Issue Type','Location in Venue','Qty','Variance ($)','Variance %','Category','Weeks Flagged','Repeat Status','Severity','Recount?','Craftable Match','Craftable Status','Notes','Week','Timestamp'];
-    fn=i=>[i.venue,i.item_name,i.sku,i.issue_type,i.sub_location,i.quantity||'',i.variance_dollars||'',i.variance_pct?i.variance_pct.toFixed(1)+'%':'',i.category,i.weeks_flagged,i.repeat_status,i.severity,i.recount?'YES':'NO',i.craftable_match,i.craftable_status,i.notes,i.week,i.timestamp];
+    hdrs=['Store','Product','SKU','Issue Type','Location','Qty','Variance ($)','Variance %','Category','Weeks Flagged','Repeat Status','Severity','Recount?','Craftable Match','Craftable Status','Notes','Week','Timestamp'];
+    fn=i=>[i.venue,i.item_name,i.sku||'',i.issue_type||'',i.sub_location||'',i.quantity||'',
+      i.variance_dollars||'',i.variance_pct?i.variance_pct.toFixed(1)+'%':'',
+      i.category||'',i.weeks_flagged||'',i.repeat_status||'',i.severity,i.recount?'YES':'NO',
+      i.craftable_match||'',i.craftable_status||'',i.notes||'',i.week||'',i.timestamp||''];
   }
   let csv='\uFEFF'+hdrs.map(h=>`"${h}"`).join(',')+'\n';
   data.forEach(i=>{csv+=fn(i).map(c=>`"${String(c||'').replace(/"/g,'""')}"`).join(',')+'\n'});
@@ -1026,9 +1070,10 @@ function exportCSV(type){
     csv+=`"Total recount items:","${data.length}"\n`;
     csv+=`"Critical:","${data.filter(i=>i.severity==='CRITICAL').length}"\n`;
     csv+=`"High:","${data.filter(i=>i.severity==='HIGH').length}"\n`;
+    csv+=`"Medium:","${data.filter(i=>i.severity==='MEDIUM').length}"\n`;
     csv+=`"Total variance:","$${data.reduce((s,i)=>s+Math.abs(i.variance_dollars||0),0).toFixed(2)}"\n`;
     csv+=`"Generated:","${new Date().toLocaleString()}"\n`;
-    csv+='\n"BY VENUE"\n';
+    csv+='\n"BY STORE"\n';
     [...new Set(data.map(i=>i.venue))].forEach(v=>{const vi=data.filter(i=>i.venue===v);csv+=`"${v}","${vi.length} items","$${vi.reduce((s,i)=>s+Math.abs(i.variance_dollars||0),0).toFixed(2)}"\n`});
   }
   const blob=new Blob([csv],{type:'text/csv;charset=utf-8'});const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=type==='recount'?`RECOUNT_${weekLabel().replace(/\s/g,'_')}.csv`:`inventory_full_${weekLabel().replace(/\s/g,'_')}.csv`;a.click();URL.revokeObjectURL(url);
