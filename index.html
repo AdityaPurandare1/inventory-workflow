@@ -424,7 +424,7 @@ function sv(){try{localStorage.setItem(SK,JSON.stringify(S))}catch(e){}}
 // ═══════════════════════════════════════════════════
 //  TABS
 // ═══════════════════════════════════════════════════
-const PANELS=['parse','data','craftable','api','settings'];
+const PANELS=['parse','data','craftable','inventory','api','settings'];
 function switchTab(n){
   document.querySelectorAll('.tab').forEach((t,i)=>{t.classList.toggle('active',PANELS[i]===n);document.getElementById('pnl-'+PANELS[i]).classList.toggle('active',PANELS[i]===n)});
   if(n==='data')renderData();if(n==='craftable')renderXRef();if(n==='inventory')renderInventory();if(n==='settings')renderSettings();
