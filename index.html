@@ -1321,7 +1321,7 @@ function renderData(){
   let html='<div class="tbl-wrap"><table><thead><tr>';
   cols.forEach((c,i)=>html+=`<th onclick="sortBy(${i})" class="${sC===i?'sorted':''}">${c.l}<span class="sa">${sC===i?(sA?'▲':'▼'):'↕'}</span></th>`);
   html+='</tr></thead><tbody>';
-  data.forEach(item=>{const vc=item.variance_dollars<0?'vn':item.variance_dollars>0?'vp':'';html+=`<tr><td>${esc(item.venue)}</td><td><strong>${esc(item.item_name)}</strong>${item.craftable_status?`<div style="font-size:9px;color:var(--text-muted);margin-top:1px">${esc(item.craftable_status)}</div>`:''}</td><td style="font-size:10px">${esc(item.issue_type)}</td><td style="font-size:10px">${esc(item.sub_location)}</td><td class="num">${item.quantity||'—'}</td><td class="num ${vc}">${item.variance_dollars?fD(item.variance_dollars):'—'}</td><td class="num">${item.weeks_flagged}</td><td><span class="sev sev-${item.severity}">${item.severity}</span></td><td>${item.recount?'<span class="recount-flag">RECOUNT</span>':'<span class="no-rc">—</span>'}</td><td style="font-size:10px;max-width:140px;overflow:hidden;text-overflow:ellipsis">${esc(item.notes)}</td></tr>`});
+  data.forEach(item=>{const vc=item.variance_dollars<0?'vn':item.variance_dollars>0?'vp':'';const isSlack=item.issue_type!=='Craftable Variance';const srcTag=isSlack?'<span style="background:#f59e0b;color:#000;font-size:8px;padding:1px 5px;border-radius:3px;font-weight:700;margin-right:4px">⚡ Initiatecare</span>':'';html+=`<tr${isSlack?' style="background:rgba(245,158,11,0.08)"':''}><td>${esc(item.venue)}</td><td>${srcTag}<strong>${esc(item.item_name)}</strong>${item.craftable_status?`<div style="font-size:9px;color:var(--text-muted);margin-top:1px">${esc(item.craftable_status)}</div>`:''}</td><td style="font-size:10px">${esc(item.issue_type)}</td><td style="font-size:10px">${esc(item.sub_location)}</td><td class="num">${item.quantity||'—'}</td><td class="num ${vc}">${item.variance_dollars?fD(item.variance_dollars):'—'}</td><td class="num">${item.weeks_flagged}</td><td><span class="sev sev-${item.severity}">${item.severity}</span></td><td>${item.recount?'<span class="recount-flag">RECOUNT</span>':'<span class="no-rc">—</span>'}</td><td style="font-size:10px;max-width:140px;overflow:hidden;text-overflow:ellipsis">${esc(item.notes)}</td></tr>`});
   html+='</tbody></table></div>';c.innerHTML=html;
 }
 function sortBy(ci){if(sC===ci)sA=!sA;else{sC=ci;sA=true}const ks=['venue','item_name','issue_type','sub_location','quantity','variance_dollars','weeks_flagged','severity','recount','notes'];const k=ks[ci];S.items.sort((a,b)=>{let va=a[k],vb=b[k];if(k==='severity'){va=sevOrd(va);vb=sevOrd(vb)}if(typeof va==='number'&&typeof vb==='number')return sA?va-vb:vb-va;va=String(va||'').toLowerCase();vb=String(vb||'').toLowerCase();return sA?va.localeCompare(vb):vb.localeCompare(va)});sv();renderData()}
@@ -1364,18 +1364,24 @@ function exportCSV(type){
   if(!data.length){toast('No recount items found. Try lowering the Min Variance threshold.');return}
   let hdrs,fn;
   if(type==='recount'){
-    hdrs=['Store','Product','Issue Type','Location','Qty Variance','Variance ($)','Variance %','Category','Severity','Craftable Status','Notes','Action Required'];
-    fn=i=>[i.venue,i.item_name,i.issue_type||'Variance',i.sub_location||'',i.quantity||'',
+    hdrs=['Store','Source','Product','Issue Type','Location','Qty Variance','Variance ($)','Variance %','Category','Severity','Craftable Status','Notes','Action Required'];
+    fn=i=>{
+      const src=i.issue_type==='Craftable Variance'?'CRAFTABLE':'⚡ Initiatecare';
+      return[i.venue,src,i.item_name,i.issue_type||'Variance',i.sub_location||'',i.quantity||'',
       i.variance_dollars?'$'+i.variance_dollars.toFixed(2):'',
       i.variance_pct?i.variance_pct.toFixed(1)+'%':'',
       i.category||'',i.severity,i.craftable_status||'',i.notes||'',
       'RECOUNT — Verify physical count vs Craftable'];
+    };
   }else{
-    hdrs=['Store','Product','SKU','Issue Type','Location','Qty','Variance ($)','Variance %','Category','Weeks Flagged','Repeat Status','Severity','Recount?','Craftable Match','Craftable Status','Notes','Week','Timestamp'];
-    fn=i=>[i.venue,i.item_name,i.sku||'',i.issue_type||'',i.sub_location||'',i.quantity||'',
+    hdrs=['Store','Source','Product','SKU','Issue Type','Location','Qty','Variance ($)','Variance %','Category','Weeks Flagged','Repeat Status','Severity','Recount?','Craftable Match','Craftable Status','Notes','Week','Timestamp'];
+    fn=i=>{
+      const src=i.issue_type==='Craftable Variance'?'CRAFTABLE':'⚡ Initiatecare';
+      return[i.venue,src,i.item_name,i.sku||'',i.issue_type||'',i.sub_location||'',i.quantity||'',
       i.variance_dollars||'',i.variance_pct?i.variance_pct.toFixed(1)+'%':'',
       i.category||'',i.weeks_flagged||'',i.repeat_status||'',i.severity,i.recount?'YES':'NO',
       i.craftable_match||'',i.craftable_status||'',i.notes||'',i.week||'',i.timestamp||''];
+    };
   }
   let csv='\uFEFF'+hdrs.map(h=>`"${h}"`).join(',')+'\n';
   data.forEach(i=>{csv+=fn(i).map(c=>`"${String(c||'').replace(/"/g,'""')}"`).join(',')+'\n'});
