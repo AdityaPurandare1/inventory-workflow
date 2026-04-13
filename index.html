@@ -1049,14 +1049,31 @@ CRITICAL: Return ONLY a valid JSON array. No explanation, no prose, no markdown.
 // ═══════════════════════════════════════════════════
 //  SCORING
 // ═══════════════════════════════════════════════════
+function isWine(i){const c=String(i.category||'').toLowerCase();return c.includes('5320')||c.includes('wine')}
 function scoreSev(i){
   const w=i.weeks_flagged||1,v=Math.abs(i.variance_dollars||0),a=i.still_active!==false;
-  if(a&&w>=15)return'CRITICAL';if(a&&w>=10)return'CRITICAL';if(a&&w>=5&&v>=200)return'CRITICAL';
-  if(!a&&w>=5&&v>=500)return'HIGH';if(a&&w>=5)return'HIGH';
-  if(a&&w>=3)return'MEDIUM';if(a&&v>=S.threshD)return'MEDIUM';
-  if(a&&w>=2)return'WATCH';if(!a&&v>=200)return'LOW';return'LOW';
+  const q=Math.abs(i.variance_qty||0);
+  const wine=isWine(i);
+  const varThresh=wine?200:50; // Wine=$200, Liquor=$50
+  const qtyThresh=1; // 1 bottle for both
+
+  // Multi-week severity (for historical tracking across weeks)
+  if(a&&w>=15)return'CRITICAL';if(a&&w>=10)return'CRITICAL';if(a&&w>=5&&v>=varThresh*4)return'CRITICAL';
+  if(!a&&w>=5&&v>=varThresh*10)return'HIGH';if(a&&w>=5)return'HIGH';
+  if(a&&w>=3)return'MEDIUM';
+
+  // Single-week severity (primary use case — 1 week of data)
+  if(v>=varThresh*10)return'HIGH'; // 10x threshold = HIGH ($500 liquor, $2000 wine)
+  if(v>=varThresh||q>=qtyThresh)return'MEDIUM'; // Meets threshold = MEDIUM
+  if(a&&w>=2)return'WATCH';
+  return'LOW';
 }
-function needsRC(i){const s=i.severity,v=Math.abs(i.variance_dollars||0),w=i.weeks_flagged||1;if(s==='CRITICAL'||s==='HIGH')return true;if(s==='MEDIUM'&&(v>=S.threshD||w>=S.threshW))return true;return false}
+function needsRC(i){
+  const s=i.severity;
+  if(s==='CRITICAL'||s==='HIGH')return true;
+  if(s==='MEDIUM')return true; // All MEDIUM items need recount (they met the threshold)
+  return false;
+}
 function normalize(s){return String(s||'').toLowerCase().replace(/[^a-z0-9]/g,'')}
 function sevOrd(s){return{CRITICAL:0,HIGH:1,MEDIUM:2,WATCH:3,LOW:4}[s]??5}
 function weekLabel(){const n=new Date(),d=n.getDay(),b=d===0?6:d-1,m=new Date(n);m.setDate(n.getDate()-b);return`Week ${m.getFullYear()}-${String(m.getMonth()+1).padStart(2,'0')}-${String(m.getDate()).padStart(2,'0')}`}
@@ -1133,7 +1150,7 @@ function crossRef(){
         if(sc>bs&&sc>=SIM_THRESHOLD){bs=sc;best=cv}
       }
     }
-    if(best){item.variance_dollars=best.variance_dollars;item.variance_pct=best.variance_pct;item.craftable_match=best.item_name;item.craftable_status=bs>=0.7?'YES — In Craftable':'REVIEW — Low Confidence';item.category=best.category||item.category}
+    if(best){item.variance_dollars=best.variance_dollars;item.variance_pct=best.variance_pct;item.variance_qty=best.variance_qty||0;item.craftable_match=best.item_name;item.craftable_status=bs>=0.7?'YES — In Craftable':'REVIEW — Low Confidence';item.category=best.category||item.category}
     else{item.craftable_status=item.craftable_status||'NOT IN CRAFTABLE'}
     item.severity=scoreSev(item);item.recount=needsRC(item);
   }
