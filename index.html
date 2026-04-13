@@ -196,6 +196,14 @@ td.num{text-align:right;font-variant-numeric:tabular-nums}
       <button class="btn-add" onclick="toggleAdd()">+ New</button>
     </div>
     <div class="add-loc" id="addBox"><div class="row"><input type="text" id="newLN" placeholder="e.g. Delilah - Vegas" style="margin:0"><button class="btn-s" onclick="addLoc()">Add</button><button class="btn-s" onclick="toggleAdd()">Cancel</button></div></div>
+
+    <button class="btn" id="slackPullBtn" onclick="pullFromSlack()" style="width:100%;margin-bottom:10px;background:var(--bg-elevated);border:1px solid #4A154B;color:#E8D5E0">
+      <span style="font-size:14px">⚡</span> Pull from Slack
+    </button>
+    <p class="hint" id="slackPullStatus" style="display:none;margin-top:-6px;margin-bottom:10px"></p>
+
+    <div style="text-align:center;color:var(--text-muted);font-size:10px;margin:8px 0;letter-spacing:1px">— OR PASTE MANUALLY —</div>
+
     <label>Paste Slack Messages</label>
     <textarea id="msgIn" placeholder="Paste inventory messages...
 
@@ -327,6 +335,14 @@ Sarah: 2x Hendrick's Gin unaccounted, walk-in"></textarea>
     </div>
 
     <div class="sg">
+      <h3>Slack Integration</h3>
+      <p class="hint" style="margin:0 0 10px">Pull messages + images directly from Slack channels. Uses a User OAuth Token from your Slack App.</p>
+      <input type="password" id="sSlackToken" placeholder="xoxp-xxxxxxxxxxxx...">
+      <button class="btn-s" onclick="saveSlackToken()">Save</button>
+      <p class="hint" style="margin:6px 0 0;font-size:10px" id="slackStatus"></p>
+    </div>
+
+    <div class="sg">
       <h3>Automation</h3>
       <p class="hint" style="margin:0 0 10px">Auto-pull from Craftable on a schedule. Runs while this page is open.</p>
       <div class="row" style="margin-bottom:10px">
@@ -378,7 +394,7 @@ Sarah: 2x Hendrick's Gin unaccounted, walk-in"></textarea>
 const SK='hw_inv_v3';
 const DV=['Bird Streets Club','Delilah - LA','Deliliah - Miami','Keys','Poppy','The Nice Guy'];
 let S=ld();
-function ld(){try{const r=localStorage.getItem(SK);if(r)return JSON.parse(r)}catch(e){}return{apiBase:'https://api.craftable.com/v1',apiKey:'',authMethod:'bearer',githubPat:'',venues:[...DV],items:[],craftData:[],threshD:100,threshW:3,interval:30,minVar:50,endpoints:{locations:'',variance:'',products:''},lastPull:null}}
+function ld(){try{const r=localStorage.getItem(SK);if(r){const p=JSON.parse(r);if(!p.slackToken)p.slackToken='';return p}}catch(e){}return{apiBase:'https://api.craftable.com/v1',apiKey:'',authMethod:'bearer',githubPat:'',slackToken:'',venues:[...DV],items:[],craftData:[],threshD:100,threshW:3,interval:30,minVar:50,endpoints:{locations:'',variance:'',products:''},lastPull:null}}
 function sv(){try{localStorage.setItem(SK,JSON.stringify(S))}catch(e){}}
 
 // ═══════════════════════════════════════════════════
@@ -405,6 +421,7 @@ function addLocS(){const n=document.getElementById('sNewLoc').value.trim();if(!n
 function renderSettings(){
   document.getElementById('sApiBase').value=S.apiBase;document.getElementById('sApiKey').value=S.apiKey;
   document.getElementById('sAuthMethod').value=S.authMethod;document.getElementById('sGithubPat').value=S.githubPat||'';
+  document.getElementById('sSlackToken').value=S.slackToken||'';
   document.getElementById('apiKeyExplorer').value=S.apiKey;document.getElementById('apiBase').value=S.apiBase;
   document.getElementById('sInterval').value=S.interval;document.getElementById('sMinVar').value=S.minVar;
   document.getElementById('sThrD').value=S.threshD;document.getElementById('sThrW').value=S.threshW;
@@ -416,9 +433,153 @@ function renderSettings(){
 }
 function saveAPI(){S.apiBase=document.getElementById('sApiBase').value.trim().replace(/\/$/,'');S.apiKey=document.getElementById('sApiKey').value.trim();S.authMethod=document.getElementById('sAuthMethod').value;sv();toast('API config saved')}
 function saveGithubPat(){S.githubPat=document.getElementById('sGithubPat').value.trim();sv();toast('GitHub token saved')}
+function saveSlackToken(){S.slackToken=document.getElementById('sSlackToken').value.trim();sv();toast('Slack token saved')}
 function saveAuto(){S.interval=parseInt(document.getElementById('sInterval').value)||0;S.minVar=parseFloat(document.getElementById('sMinVar').value)||50;sv();setupAutoPull();toast('Automation saved')}
 function saveThr(){S.threshD=parseFloat(document.getElementById('sThrD').value)||100;S.threshW=parseInt(document.getElementById('sThrW').value)||3;sv();toast('Thresholds saved')}
 function saveEndpoints(){S.endpoints.locations=document.getElementById('sEpLoc').value.trim();S.endpoints.variance=document.getElementById('sEpVar').value.trim();S.endpoints.products=document.getElementById('sEpProd').value.trim();sv();toast('Endpoints saved')}
+
+// ═══════════════════════════════════════════════════
+//  SLACK INTEGRATION — Pull messages + images
+// ═══════════════════════════════════════════════════
+const SLACK_PROXY='https://slack-proxy.apurandare.workers.dev';
+const VENUE_CHANNELS={
+  'Bird Streets Club':'hwood-birdstreetsclub',
+  'Delilah - LA':'hwood-delilah-la',
+  'Deliliah - Miami':'hwood-delilah-miami',
+  'Keys':'hwood-keysclub',
+  'Poppy':'hwood-poppy',
+  'The Nice Guy':'hwood-theniceguy',
+};
+
+async function slackAPI(method,params={}){
+  const qs=Object.entries(params).map(([k,v])=>`${k}=${encodeURIComponent(v)}`).join('&');
+  const url=`${SLACK_PROXY}/${method}${qs?'?'+qs:''}`;
+  const res=await fetch(url,{headers:{'Authorization':'Bearer '+S.slackToken}});
+  if(!res.ok){const t=await res.text();throw new Error(`Slack ${res.status}: ${t.slice(0,200)}`)}
+  const data=await res.json();
+  if(!data.ok)throw new Error(`Slack error: ${data.error}`);
+  return data;
+}
+
+async function pullFromSlack(){
+  const venue=document.getElementById('locSel').value;
+  const btn=document.getElementById('slackPullBtn');
+  const status=document.getElementById('slackPullStatus');
+
+  if(!venue){status.style.display='block';status.textContent='Select a venue first.';status.style.color='var(--error)';return}
+  if(!S.slackToken){status.style.display='block';status.textContent='Add your Slack token in Settings.';status.style.color='var(--error)';return}
+
+  const channelName=VENUE_CHANNELS[venue];
+  if(!channelName){status.style.display='block';status.textContent=`No Slack channel mapped for "${venue}". Add mapping in code.`;status.style.color='var(--error)';return}
+
+  btn.disabled=true;
+  status.style.display='block';
+  status.style.color='var(--accent)';
+  status.textContent='Finding channel...';
+
+  try{
+    // Step 1: Find channel ID
+    let channelId=null;
+    for(const type of ['private_channel','public_channel']){
+      status.textContent=`Searching ${type}s for #${channelName}...`;
+      let cursor='';
+      for(let page=0;page<5;page++){
+        const params={types:type,limit:'200'};
+        if(cursor)params.cursor=cursor;
+        const data=await slackAPI('conversations.list',params);
+        const ch=data.channels.find(c=>c.name===channelName);
+        if(ch){channelId=ch.id;break}
+        cursor=data.response_metadata?.next_cursor;
+        if(!cursor)break;
+      }
+      if(channelId)break;
+    }
+
+    if(!channelId){
+      status.textContent=`Channel #${channelName} not found. Make sure you have access.`;
+      status.style.color='var(--error)';
+      return;
+    }
+
+    status.textContent=`Found #${channelName} (${channelId}). Pulling today's messages...`;
+
+    // Step 2: Pull messages from today (last 24 hours)
+    const now=Math.floor(Date.now()/1000);
+    const oldest=now-86400; // 24 hours ago
+    let allMessages=[];
+    let cursor='';
+    for(let page=0;page<10;page++){
+      const params={channel:channelId,oldest:String(oldest),latest:String(now),limit:'200'};
+      if(cursor)params.cursor=cursor;
+      const data=await slackAPI('conversations.history',params);
+      allMessages.push(...(data.messages||[]));
+      cursor=data.response_metadata?.next_cursor;
+      if(!cursor||!data.has_more)break;
+    }
+
+    status.textContent=`Fetched ${allMessages.length} messages. Extracting text + images...`;
+
+    // Step 3: Extract text and image files
+    let textParts=[];
+    let imageFiles=[];
+
+    for(const msg of allMessages.reverse()){
+      // Get username
+      const user=msg.user?msg.user.slice(0,8):'';
+      const text=(msg.text||'').replace(/<[^>]+>/g,'').trim();
+      if(text)textParts.push(text);
+
+      // Collect image files
+      if(msg.files){
+        for(const f of msg.files){
+          if(f.mimetype&&f.mimetype.startsWith('image/')&&f.url_private){
+            imageFiles.push({url:f.url_private,name:f.name||'image.jpg',mimeType:f.mimetype});
+          }
+        }
+      }
+    }
+
+    // Put text in the textarea
+    const textarea=document.getElementById('msgIn');
+    textarea.value=textParts.join('\n');
+
+    // Download images through proxy
+    if(imageFiles.length>0){
+      status.textContent=`Downloading ${imageFiles.length} images...`;
+      let downloaded=0;
+      for(const img of imageFiles){
+        try{
+          const proxyUrl=`${SLACK_PROXY}/file-proxy?url=${encodeURIComponent(img.url)}`;
+          const res=await fetch(proxyUrl,{headers:{'Authorization':'Bearer '+S.slackToken}});
+          if(res.ok){
+            const blob=await res.blob();
+            const reader=new FileReader();
+            reader.onload=function(e){
+              const dataUrl=e.target.result;
+              const base64=(dataUrl.split(',')[1])||'';
+              pendingImages.push({dataUrl,base64,mimeType:img.mimeType,name:img.name});
+              renderImagePreviews();
+            };
+            reader.readAsDataURL(blob);
+            downloaded++;
+          }
+        }catch(e){console.warn('Failed to download image:',img.name,e)}
+        // Small delay to avoid rate limits
+        if(downloaded%3===0&&downloaded>0)await new Promise(r=>setTimeout(r,1000));
+        status.textContent=`Downloading images ${downloaded}/${imageFiles.length}...`;
+      }
+    }
+
+    status.style.color='var(--success)';
+    status.textContent=`✓ Pulled ${textParts.length} messages + ${imageFiles.length} images from #${channelName}. Hit "Parse & Add Issues" to process.`;
+
+  }catch(e){
+    status.textContent='Error: '+e.message;
+    status.style.color='var(--error)';
+  }finally{
+    btn.disabled=false;
+  }
+}
 
 // ═══════════════════════════════════════════════════
 //  CRAFTABLE API — helpers
