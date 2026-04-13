@@ -1330,8 +1330,11 @@ function scoreSev(i){
   if(a&&w>=3)return'MEDIUM';
 
   // Single-week severity (primary use case — 1 week of data)
+  // Dollar variance is the primary trigger, respecting category thresholds
   if(v>=varThresh*10)return'HIGH'; // 10x threshold = HIGH
-  if(v>=varThresh||q>=qtyThresh)return'MEDIUM'; // Meets threshold = MEDIUM
+  if(v>=varThresh)return'MEDIUM'; // Dollar variance meets category threshold
+  // Bottle variance: only for liquor (not wine) — wine uses dollar threshold only
+  if(!wine&&q>=qtyThresh&&v>=(S.threshLiquor||50))return'MEDIUM';
   if(a&&w>=2)return'WATCH';
   return'LOW';
 }
