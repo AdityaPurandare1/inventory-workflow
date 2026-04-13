@@ -1115,14 +1115,13 @@ function venueMatch(a,b){
 
 function crossRef(){
   if(!S.craftData.length)return;
+  // Step 1: Cross-reference existing Slack-parsed items against Craftable
   for(const item of S.items){
-    // Skip cross-referencing if item name is not a real product
     if(!isValidProductName(item.item_name)){
       item.craftable_status='NOT IN CRAFTABLE';
       item.severity=scoreSev(item);item.recount=needsRC(item);
       continue;
     }
-    // Skip if issue type explicitly says not in craftable (it won't be there)
     const itype=(item.issue_type||'').toLowerCase();
     const skipMatch=itype.includes('not in craftable');
 
@@ -1138,6 +1137,21 @@ function crossRef(){
     else{item.craftable_status=item.craftable_status||'NOT IN CRAFTABLE'}
     item.severity=scoreSev(item);item.recount=needsRC(item);
   }
+
+  // Step 2: Add Craftable-only items (not already matched) into S.items
+  const matchedCraftable=new Set();
+  S.items.forEach(i=>{if(i.craftable_match)matchedCraftable.add(normalize(i.craftable_match))});
+  const now=new Date().toLocaleString(),wk=weekLabel();
+  for(const cv of S.craftData){
+    if(matchedCraftable.has(normalize(cv.item_name)))continue;
+    // Check if already in S.items as a Craftable Variance item
+    const alreadyIn=S.items.some(i=>i.issue_type==='Craftable Variance'&&normalize(i.item_name)===normalize(cv.item_name)&&venueMatch(i.venue,cv.venue));
+    if(alreadyIn)continue;
+    const obj={venue:cv.venue,item_name:cv.item_name,sku:'',issue_type:'Craftable Variance',sub_location:'',quantity:0,notes:`Actual: ${cv.actual_amount||'?'}, Theo: ${cv.theo_amount||'?'}`,variance_dollars:cv.variance_dollars,variance_pct:cv.variance_pct,craftable_match:cv.item_name,craftable_status:'Craftable Only',weeks_flagged:1,repeat_status:'NEW',still_active:true,severity:'',recount:false,timestamp:now,week:wk,category:cv.category||''};
+    obj.severity=scoreSev(obj);obj.recount=needsRC(obj);
+    S.items.push(obj);
+  }
+
   S.items.sort((a,b)=>sevOrd(a.severity)-sevOrd(b.severity));sv();updateBadge();
 }
 
