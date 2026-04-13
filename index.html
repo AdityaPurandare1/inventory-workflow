@@ -276,11 +276,13 @@ Sarah: 2x Hendrick's Gin unaccounted, walk-in"></textarea>
           </select>
         </div>
       </div>
-      <div style="display:flex;gap:8px;margin-top:8px">
+      <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">
+        <button class="btn" id="craftBotBtn" onclick="pullCraftableBot()" style="background:#2d6a4f;border-color:#2d6a4f">🤖 Auto-Pull from Craftable</button>
         <button class="btn" onclick="pullCraftable()">Pull Current Variance</button>
         <button class="btn-s" onclick="document.getElementById('cFile').click()">Import Craftable Export</button>
         <input type="file" id="cFile" accept=".csv,.xlsx,.xls" style="display:none" onchange="importCSV(event)">
       </div>
+      <p class="hint" id="craftBotStatus" style="display:none;margin-top:8px"></p>
       <div id="cPeriodInfo" style="margin-top:10px;font-size:10px;color:var(--dim);display:none"></div>
     </div>
     <div class="result" id="cRes"></div>
@@ -746,6 +748,102 @@ async function testVariance(){
       apiLogLine(`\n<span class="ok">✓ Variance endpoint works. The automated pull will use this.</span>`);
     }
   }catch(e){apiLogLine(`<span class="fail">Error: ${e.message}</span>`)}
+}
+
+// ═══════════════════════════════════════════════════
+//  CRAFTABLE BOT — Auto-pull via local Playwright bot
+// ═══════════════════════════════════════════════════
+const CRAFT_BOT='http://localhost:3456';
+
+async function pullCraftableBot(){
+  const venueEl=document.getElementById('cVen');
+  const venue=venueEl.value||document.getElementById('locSel').value;
+  const btn=document.getElementById('craftBotBtn');
+  const status=document.getElementById('craftBotStatus');
+
+  if(!venue){status.style.display='block';status.textContent='Select a store first.';status.style.color='var(--error)';return}
+
+  btn.disabled=true;
+  status.style.display='block';
+  status.style.color='var(--accent)';
+  status.textContent='Connecting to Craftable bot...';
+
+  try{
+    // Check if bot is running
+    let botOk=false;
+    try{
+      const check=await fetch(`${CRAFT_BOT}/status`,{signal:AbortSignal.timeout(3000)});
+      if(check.ok)botOk=true;
+    }catch(e){}
+
+    if(!botOk){
+      status.textContent='⚠️ Craftable bot is not running. Start it with: node craftable-bot.js';
+      status.style.color='var(--error)';
+      return;
+    }
+
+    // Trigger download
+    status.textContent=`Telling bot to download AVT for ${venue}...`;
+    const res=await fetch(`${CRAFT_BOT}/download?store=${encodeURIComponent(venue)}`);
+    const data=await res.json();
+
+    if(!data.ok){
+      status.textContent='Error: '+(data.error||'Unknown');
+      status.style.color='var(--error)';
+      return;
+    }
+
+    // Poll status until done
+    status.textContent='Bot is working... logging in & navigating Craftable';
+    for(let i=0;i<60;i++){
+      await new Promise(r=>setTimeout(r,3000));
+      try{
+        const poll=await fetch(`${CRAFT_BOT}/status`);
+        const st=await poll.json();
+        status.textContent=`Bot: ${st.status}`;
+        if(st.status.startsWith('done:')){
+          // Download the file from bot and import it
+          status.textContent='Downloading file from bot...';
+          const fileRes=await fetch(`${CRAFT_BOT}/file`);
+          if(!fileRes.ok)throw new Error('Failed to get file from bot');
+          const blob=await fileRes.blob();
+          const arrayBuf=await blob.arrayBuffer();
+
+          // Import using XLSX
+          if(typeof XLSX==='undefined'){
+            status.textContent='Loading XLSX library...';
+            await new Promise((resolve,reject)=>{
+              const s=document.createElement('script');
+              s.src='https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
+              s.onload=resolve;s.onerror=reject;
+              document.head.appendChild(s);
+            });
+          }
+
+          const wb=XLSX.read(arrayBuf,{type:'array'});
+          // Trigger the same import logic as file upload
+          const fakeEvent={target:{files:[new File([blob],st.status.replace('done: ',''),{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'})]}};
+          importCSV(fakeEvent);
+
+          status.style.color='var(--success)';
+          status.textContent=`✅ Auto-imported AVT for ${venue}`;
+          return;
+        }
+        if(st.status.startsWith('error:')){
+          status.textContent='Bot error: '+st.status;
+          status.style.color='var(--error)';
+          return;
+        }
+      }catch(e){/* polling error, retry */}
+    }
+    status.textContent='Timed out waiting for bot (3 min). Check bot terminal.';
+    status.style.color='var(--error)';
+  }catch(e){
+    status.textContent='Error: '+e.message;
+    status.style.color='var(--error)';
+  }finally{
+    btn.disabled=false;
+  }
 }
 
 // ═══════════════════════════════════════════════════
