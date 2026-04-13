@@ -369,10 +369,12 @@ Sarah: 2x Hendrick's Gin unaccounted, walk-in"></textarea>
 
     <div class="sg">
       <h3>Recount Thresholds</h3>
+      <p class="hint" style="margin:0 0 10px">Items above these thresholds get flagged for recount. Liquor and Wine have different thresholds.</p>
       <div class="row">
-        <div class="field"><label>Min Variance $ for Recount</label><input type="number" id="sThrD" value="100" style="margin:0"></div>
-        <div class="field"><label>Min Weeks Flagged</label><input type="number" id="sThrW" value="3" style="margin:0"></div>
+        <div class="field"><label>Liquor Min Variance ($)</label><input type="number" id="sThrLiquor" value="50" style="margin:0"></div>
+        <div class="field"><label>Wine Min Variance ($)</label><input type="number" id="sThrWine" value="200" style="margin:0"></div>
       </div>
+      <div class="field" style="margin-top:8px"><label>Min Bottle Variance (all categories)</label><input type="number" id="sThrBottle" value="1" style="margin:0;max-width:200px"></div>
       <button class="btn-s" onclick="saveThr()" style="margin-top:6px">Save</button>
     </div>
 
@@ -394,7 +396,7 @@ Sarah: 2x Hendrick's Gin unaccounted, walk-in"></textarea>
 const SK='hw_inv_v3';
 const DV=['Bird Streets Club','Delilah - LA','Deliliah - Miami','Keys','Poppy','The Nice Guy'];
 let S=ld();
-function ld(){try{const r=localStorage.getItem(SK);if(r){const p=JSON.parse(r);if(!p.slackToken)p.slackToken='';return p}}catch(e){}return{apiBase:'https://api.craftable.com/v1',apiKey:'',authMethod:'bearer',githubPat:'',slackToken:'',venues:[...DV],items:[],craftData:[],threshD:100,threshW:3,interval:30,minVar:50,endpoints:{locations:'',variance:'',products:''},lastPull:null}}
+function ld(){try{const r=localStorage.getItem(SK);if(r){const p=JSON.parse(r);if(!p.slackToken)p.slackToken='';if(!p.threshLiquor)p.threshLiquor=50;if(!p.threshWine)p.threshWine=200;if(!p.threshBottle)p.threshBottle=1;return p}}catch(e){}return{apiBase:'https://api.craftable.com/v1',apiKey:'',authMethod:'bearer',githubPat:'',slackToken:'',venues:[...DV],items:[],craftData:[],threshLiquor:50,threshWine:200,threshBottle:1,threshD:100,threshW:3,interval:30,minVar:50,endpoints:{locations:'',variance:'',products:''},lastPull:null}}
 function sv(){try{localStorage.setItem(SK,JSON.stringify(S))}catch(e){}}
 
 // ═══════════════════════════════════════════════════
@@ -424,7 +426,7 @@ function renderSettings(){
   document.getElementById('sSlackToken').value=S.slackToken||'';
   document.getElementById('apiKeyExplorer').value=S.apiKey;document.getElementById('apiBase').value=S.apiBase;
   document.getElementById('sInterval').value=S.interval;document.getElementById('sMinVar').value=S.minVar;
-  document.getElementById('sThrD').value=S.threshD;document.getElementById('sThrW').value=S.threshW;
+  document.getElementById('sThrLiquor').value=S.threshLiquor||50;document.getElementById('sThrWine').value=S.threshWine||200;document.getElementById('sThrBottle').value=S.threshBottle||1;
   document.getElementById('sEpLoc').value=S.endpoints.locations||'';
   document.getElementById('sEpVar').value=S.endpoints.variance||'';
   document.getElementById('sEpProd').value=S.endpoints.products||'';
@@ -435,7 +437,7 @@ function saveAPI(){S.apiBase=document.getElementById('sApiBase').value.trim().re
 function saveGithubPat(){S.githubPat=document.getElementById('sGithubPat').value.trim();sv();toast('GitHub token saved')}
 function saveSlackToken(){S.slackToken=document.getElementById('sSlackToken').value.trim();sv();toast('Slack token saved')}
 function saveAuto(){S.interval=parseInt(document.getElementById('sInterval').value)||0;S.minVar=parseFloat(document.getElementById('sMinVar').value)||50;sv();setupAutoPull();toast('Automation saved')}
-function saveThr(){S.threshD=parseFloat(document.getElementById('sThrD').value)||100;S.threshW=parseInt(document.getElementById('sThrW').value)||3;sv();toast('Thresholds saved')}
+function saveThr(){S.threshLiquor=parseFloat(document.getElementById('sThrLiquor').value)||50;S.threshWine=parseFloat(document.getElementById('sThrWine').value)||200;S.threshBottle=parseFloat(document.getElementById('sThrBottle').value)||1;sv();toast('Thresholds saved')}
 function saveEndpoints(){S.endpoints.locations=document.getElementById('sEpLoc').value.trim();S.endpoints.variance=document.getElementById('sEpVar').value.trim();S.endpoints.products=document.getElementById('sEpProd').value.trim();sv();toast('Endpoints saved')}
 
 // ═══════════════════════════════════════════════════
@@ -1221,8 +1223,8 @@ function scoreSev(i){
   const w=i.weeks_flagged||1,v=Math.abs(i.variance_dollars||0),a=i.still_active!==false;
   const q=Math.abs(i.variance_qty||0);
   const wine=isWine(i);
-  const varThresh=wine?200:50; // Wine=$200, Liquor=$50
-  const qtyThresh=1; // 1 bottle for both
+  const varThresh=wine?(S.threshWine||200):(S.threshLiquor||50);
+  const qtyThresh=S.threshBottle||1;
 
   // Multi-week severity (for historical tracking across weeks)
   if(a&&w>=15)return'CRITICAL';if(a&&w>=10)return'CRITICAL';if(a&&w>=5&&v>=varThresh*4)return'CRITICAL';
@@ -1230,7 +1232,7 @@ function scoreSev(i){
   if(a&&w>=3)return'MEDIUM';
 
   // Single-week severity (primary use case — 1 week of data)
-  if(v>=varThresh*10)return'HIGH'; // 10x threshold = HIGH ($500 liquor, $2000 wine)
+  if(v>=varThresh*10)return'HIGH'; // 10x threshold = HIGH
   if(v>=varThresh||q>=qtyThresh)return'MEDIUM'; // Meets threshold = MEDIUM
   if(a&&w>=2)return'WATCH';
   return'LOW';
