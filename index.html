@@ -777,11 +777,9 @@ const CRAFT_BOT='http://localhost:3456';
 
 async function pullCraftableBot(){
   const venueEl=document.getElementById('cVen');
-  const venue=venueEl.value||document.getElementById('locSel').value;
+  const venue=venueEl?venueEl.value:'';
   const btn=document.getElementById('craftBotBtn');
   const status=document.getElementById('craftBotStatus');
-
-  if(!venue){status.style.display='block';status.textContent='Select a store first.';status.style.color='var(--error)';return}
 
   btn.disabled=true;
   status.style.display='block';
@@ -803,8 +801,8 @@ async function pullCraftableBot(){
     }
 
     // Trigger download
-    status.textContent=`Telling bot to download AVT for ${venue}...`;
-    const res=await fetch(`${CRAFT_BOT}/download?store=${encodeURIComponent(venue)}`);
+    status.textContent='Telling bot to download AVT for all stores...';
+    const res=await fetch(`${CRAFT_BOT}/download?store=all`);
     const data=await res.json();
 
     if(!data.ok){
@@ -1798,9 +1796,17 @@ function importInventory(ev){
   }else{
     // XLSX
     const reader=new FileReader();
-    reader.onload=function(e){
+    reader.onload=async function(e){
       try{
-        if(typeof XLSX==='undefined'){showInvRes(false,'XLSX library not loaded. Import a Craftable file on the Craftable tab first.');return}
+        if(typeof XLSX==='undefined'){
+          showInvRes(false,'Loading XLSX library...');
+          await new Promise((resolve,reject)=>{
+            const s=document.createElement('script');
+            s.src='https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
+            s.onload=resolve;s.onerror=()=>reject(new Error('Failed to load XLSX library'));
+            document.head.appendChild(s);
+          });
+        }
         const wb=XLSX.read(e.target.result,{type:'array'});
         const ws=wb.Sheets[wb.SheetNames[0]];
         const rows=XLSX.utils.sheet_to_json(ws,{header:1,defval:''});
