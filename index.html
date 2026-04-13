@@ -185,6 +185,7 @@ td.num{text-align:right;font-variant-numeric:tabular-nums}
     <button class="tab active" onclick="switchTab('parse')">Parse</button>
     <button class="tab" onclick="switchTab('data')">Recount <span class="badge" id="cBadge">0</span></button>
     <button class="tab" onclick="switchTab('craftable')">Craftable</button>
+    <button class="tab" onclick="switchTab('inventory')">Inventory</button>
     <button class="tab" onclick="switchTab('api')">API Explorer</button>
     <button class="tab" onclick="switchTab('settings')">Settings</button>
   </div>
@@ -287,6 +288,25 @@ Sarah: 2x Hendrick's Gin unaccounted, walk-in"></textarea>
     </div>
     <div class="result" id="cRes"></div>
     <div id="xrefTbl" style="margin-top:16px"></div>
+  </div>
+
+  <!-- ═══ INVENTORY REFERENCE ═══ -->
+  <div id="pnl-inventory" class="pnl">
+    <div class="sg">
+      <h3>Master Inventory List</h3>
+      <p class="hint" style="margin:0 0 10px">Upload your full product list from Craftable. The AI uses this to recognize product names during parsing — especially items with unusual names like "Just One Drink" or "Still Gin".</p>
+      <div style="display:flex;gap:8px;margin-bottom:12px">
+        <button class="btn" onclick="document.getElementById('invFile').click()">Upload Inventory File</button>
+        <button class="btn-s" onclick="clearInventory()">Clear List</button>
+        <input type="file" id="invFile" accept=".csv,.xlsx,.xls" style="display:none" onchange="importInventory(event)">
+      </div>
+      <div class="result" id="invRes" style="display:none"></div>
+      <div id="invStats" style="margin-bottom:12px"></div>
+      <div style="margin-bottom:8px">
+        <input type="text" id="invSearch" placeholder="Search products..." oninput="renderInventory()" style="margin:0;max-width:400px">
+      </div>
+      <div id="invTbl"></div>
+    </div>
   </div>
 
   <!-- ═══ API EXPLORER ═══ -->
@@ -407,7 +427,7 @@ function sv(){try{localStorage.setItem(SK,JSON.stringify(S))}catch(e){}}
 const PANELS=['parse','data','craftable','api','settings'];
 function switchTab(n){
   document.querySelectorAll('.tab').forEach((t,i)=>{t.classList.toggle('active',PANELS[i]===n);document.getElementById('pnl-'+PANELS[i]).classList.toggle('active',PANELS[i]===n)});
-  if(n==='data')renderData();if(n==='craftable')renderXRef();if(n==='settings')renderSettings();
+  if(n==='data')renderData();if(n==='craftable')renderXRef();if(n==='inventory')renderInventory();if(n==='settings')renderSettings();
 }
 
 // ═══════════════════════════════════════════════════
@@ -1249,11 +1269,24 @@ IMPORTANT — Be aggressive about extraction:
 - "Not in Craftable, storage room: Maestro Dobel 50" → issue_type: "Product not in Craftable"
 - "Variant Moet 'Imperal' should be removed" → issue_type: "Mislabeled"
 
+H.Wood Group message format — staff often write: "product name, size, location, issue". Examples:
+- "Just One Drink 750ml prep Bar fridges Product not in craftable" → item: "Just One Drink 750ml", location: "Bar fridges", issue: "Product not in Craftable"
+- "San Pelligrino 1L, Walk In, Product Doesnt Scan" → item: "San Pelligrino 1L"
+- "Clase Azul Ultra Anejo, Service Well, Product Not In Craftable" → item: "Clase Azul Ultra Anejo"
+- "Tyler 'Mae Estate' Chardonnay 2021 750ml, Wine Rack, No Sticker" → item: "Tyler Mae Estate Chardonnay 2021 750ml"
+
+WATCH OUT for product names that look like common phrases but ARE real products:
+- "Just One Drink" = a real product brand
+- "Still Gin" = a real gin brand
+- "Cold Brew" = a real prep item
+- "Olive Juice" = a real prep item
+Treat the FIRST words before any size (ml/oz/L) or location as the product name.
+
 ONLY skip a message if it has NO product name at all and just describes a location with a photo reference.
 
 When in doubt, INCLUDE the item. Combine duplicates. Return [] only if truly zero products named.
 
-CRITICAL: Return ONLY a valid JSON array. No explanation, no prose, no markdown. Just the raw JSON array starting with [ and ending with ].`;
+CRITICAL: Return ONLY a valid JSON array. No explanation, no prose, no markdown. Just the raw JSON array starting with [ and ending with ].` + getInventoryHint();
 
   // Build message content — text + images
   const content = [];
@@ -1714,6 +1747,147 @@ function exportCSV(type){
   const blob=new Blob([csv],{type:'text/csv;charset=utf-8'});const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=type==='recount'?`RECOUNT_${weekLabel().replace(/\s/g,'_')}.csv`:`inventory_full_${weekLabel().replace(/\s/g,'_')}.csv`;a.click();URL.revokeObjectURL(url);
   toast(type==='recount'?'Recount CSV downloaded':'Full CSV downloaded');
 }
+// ═══════════════════════════════════════════════════
+//  MASTER INVENTORY LIST
+// ═══════════════════════════════════════════════════
+const INV_KEY='hwood_inventory';
+let masterInventory=[];
+
+function loadInventory(){
+  try{const d=localStorage.getItem(INV_KEY);if(d)masterInventory=JSON.parse(d)}catch(e){}
+}
+function saveInventory(){
+  try{localStorage.setItem(INV_KEY,JSON.stringify(masterInventory))}catch(e){}
+}
+
+function importInventory(ev){
+  const file=ev.target.files[0];if(!file)return;
+  ev.target.value='';
+  const res=document.getElementById('invRes');
+
+  const ext=file.name.split('.').pop().toLowerCase();
+  if(ext==='csv'){
+    const reader=new FileReader();
+    reader.onload=function(e){
+      try{
+        const lines=e.target.result.split('\n').map(l=>l.trim()).filter(l=>l);
+        if(!lines.length){showInvRes(false,'Empty file');return}
+        // Find the column with product names
+        const header=csvLine(lines[0]).map(h=>h.trim().toUpperCase());
+        const nameCol=header.findIndex(h=>h.includes('ITEM')||h.includes('PRODUCT')||h.includes('NAME'));
+        const catCol=header.findIndex(h=>h.includes('CATEGORY')||h.includes('CAT'));
+        const storeCol=header.findIndex(h=>h.includes('STORE')||h.includes('LOCATION'));
+        if(nameCol<0){showInvRes(false,'No ITEM/PRODUCT/NAME column found in header: '+header.join(', '));return}
+        masterInventory=[];
+        for(let i=1;i<lines.length;i++){
+          const cols=csvLine(lines[i]);
+          const name=(cols[nameCol]||'').trim();
+          if(name.length>2){
+            masterInventory.push({
+              name,
+              category:catCol>=0?(cols[catCol]||'').trim():'',
+              store:storeCol>=0?(cols[storeCol]||'').trim():'',
+            });
+          }
+        }
+        saveInventory();renderInventory();
+        showInvRes(true,`Imported ${masterInventory.length} products from CSV`);
+      }catch(err){showInvRes(false,'Error: '+err.message)}
+    };
+    reader.readAsText(file);
+  }else{
+    // XLSX
+    const reader=new FileReader();
+    reader.onload=function(e){
+      try{
+        if(typeof XLSX==='undefined'){showInvRes(false,'XLSX library not loaded. Import a Craftable file on the Craftable tab first.');return}
+        const wb=XLSX.read(e.target.result,{type:'array'});
+        const ws=wb.Sheets[wb.SheetNames[0]];
+        const rows=XLSX.utils.sheet_to_json(ws,{header:1,defval:''});
+        if(!rows.length){showInvRes(false,'Empty file');return}
+        // Find header row (first row with ITEM or PRODUCT)
+        let headerIdx=0;
+        for(let i=0;i<Math.min(10,rows.length);i++){
+          const r=rows[i].map(c=>String(c).toUpperCase());
+          if(r.some(c=>c.includes('ITEM')||c.includes('PRODUCT'))){headerIdx=i;break}
+        }
+        const header=rows[headerIdx].map(c=>String(c).toUpperCase().trim());
+        const nameCol=header.findIndex(h=>h.includes('ITEM')||h.includes('PRODUCT')||h.includes('NAME'));
+        const catCol=header.findIndex(h=>h.includes('CATEGORY')||h.includes('CAT'));
+        const storeCol=header.findIndex(h=>h.includes('STORE')||h.includes('LOCATION'));
+        if(nameCol<0){showInvRes(false,'No ITEM/PRODUCT/NAME column found: '+header.join(', '));return}
+        masterInventory=[];
+        for(let i=headerIdx+1;i<rows.length;i++){
+          const r=rows[i];
+          const name=String(r[nameCol]||'').trim();
+          if(name.length>2){
+            masterInventory.push({
+              name,
+              category:catCol>=0?String(r[catCol]||'').trim():'',
+              store:storeCol>=0?String(r[storeCol]||'').trim():'',
+            });
+          }
+        }
+        // Deduplicate by name
+        const seen=new Set();
+        masterInventory=masterInventory.filter(p=>{const k=normalize(p.name);if(seen.has(k))return false;seen.add(k);return true});
+        saveInventory();renderInventory();
+        showInvRes(true,`Imported ${masterInventory.length} unique products from ${file.name}`);
+      }catch(err){showInvRes(false,'Error: '+err.message)}
+    };
+    reader.readAsArrayBuffer(file);
+  }
+}
+
+function clearInventory(){
+  if(!confirm('Clear master inventory list?'))return;
+  masterInventory=[];saveInventory();renderInventory();
+  document.getElementById('invRes').style.display='none';
+  toast('Inventory cleared');
+}
+
+function showInvRes(ok,msg){
+  const el=document.getElementById('invRes');
+  el.className='result '+(ok?'ok':'err');el.innerHTML=msg;el.style.display='block';
+}
+
+function renderInventory(){
+  const search=(document.getElementById('invSearch')||{}).value||'';
+  const stats=document.getElementById('invStats');
+  const tbl=document.getElementById('invTbl');
+  if(!stats||!tbl)return;
+
+  stats.innerHTML=masterInventory.length?
+    `<span style="color:var(--success);font-size:12px">✓ ${masterInventory.length} products loaded — AI will use these as reference during parsing</span>`:
+    `<span style="color:var(--text-muted);font-size:12px">No inventory loaded. Upload a file to improve AI parsing accuracy.</span>`;
+
+  if(!masterInventory.length){tbl.innerHTML='';return}
+
+  let filtered=masterInventory;
+  if(search.length>=2){
+    const s=search.toLowerCase();
+    filtered=masterInventory.filter(p=>p.name.toLowerCase().includes(s)||p.category.toLowerCase().includes(s));
+  }
+
+  const showing=filtered.slice(0,200);
+  let html=`<div style="font-size:10px;color:var(--text-muted);margin-bottom:6px">Showing ${showing.length}${filtered.length>200?' of '+filtered.length:''} products</div>`;
+  html+='<div class="tbl-wrap"><table><thead><tr><th>Product Name</th><th>Category</th></tr></thead><tbody>';
+  showing.forEach(p=>{
+    html+=`<tr><td>${esc(p.name)}</td><td style="font-size:10px">${esc(p.category)}</td></tr>`;
+  });
+  html+='</tbody></table></div>';
+  tbl.innerHTML=html;
+}
+
+// Get top product names for the AI prompt (max 500 to avoid token overflow)
+function getInventoryHint(){
+  if(!masterInventory.length)return'';
+  const names=masterInventory.slice(0,500).map(p=>p.name);
+  return`\n\nREFERENCE — Known products in our inventory (use these to identify product names in messages):\n${names.join(', ')}`;
+}
+
+loadInventory();
+
 function clearAll(){if(!confirm('Clear all data?'))return;S.items=[];S.craftData=[];sv();renderData();updateBadge();toast('Cleared')}
 
 // ═══════════════════════════════════════════════════
