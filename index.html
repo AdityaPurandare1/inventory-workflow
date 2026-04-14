@@ -194,7 +194,17 @@ td.num{text-align:right;font-variant-numeric:tabular-nums}
   <div id="pnl-parse" class="pnl active">
     <div class="row" style="margin-bottom:14px">
       <div class="field"><label>Venue</label><select id="locSel"><option value="">— Select venue —</option></select></div>
+      <div class="field" style="max-width:200px">
+        <label>Count Phase</label>
+        <select id="countPhase" onchange="onCountPhaseChange()" style="margin:0">
+          <option value="1">Count 1 — Initial</option>
+          <option value="2">Count 2 — Recount</option>
+        </select>
+      </div>
       <button class="btn-add" onclick="toggleAdd()">+ New</button>
+    </div>
+    <div id="countHint" class="hint" style="margin-top:-8px;margin-bottom:12px;padding:8px 12px;background:var(--accent-dim);border-radius:6px;border:1px solid rgba(245,200,66,0.2)">
+      <strong style="color:var(--accent)">Count 1:</strong> Pull Slack messages → Parse issues → Import Craftable AVT → Generate recount list
     </div>
     <div class="add-loc" id="addBox"><div class="row"><input type="text" id="newLN" placeholder="e.g. Delilah - Vegas" style="margin:0"><button class="btn-s" onclick="addLoc()">Add</button><button class="btn-s" onclick="toggleAdd()">Cancel</button></div></div>
 
@@ -1544,6 +1554,84 @@ function crossRef(){
 }
 
 // ═══════════════════════════════════════════════════
+//  COUNT PHASE — Count 1 vs Count 2
+// ═══════════════════════════════════════════════════
+function onCountPhaseChange(){
+  const phase=document.getElementById('countPhase').value;
+  const hint=document.getElementById('countHint');
+  const parseBtn=document.getElementById('parseBtn');
+  if(phase==='1'){
+    hint.innerHTML='<strong style="color:var(--accent)">Count 1:</strong> Pull Slack messages \u2192 Parse issues \u2192 Import Craftable AVT \u2192 Generate recount list';
+    parseBtn.textContent='Parse & Add Issues';
+  }else{
+    hint.innerHTML='<strong style="color:var(--success)">Count 2 (Recount):</strong> Pull Slack messages \u2192 Parse \u2192 <strong>Auto-pull fresh Craftable AVT</strong> \u2192 Cross-reference \u2192 Resolved items auto-detected';
+    parseBtn.textContent='Parse & Run Recount';
+  }
+}
+
+async function runCount2PostProcess(venue,btn,res){
+  // After Count 2 parsing, automatically pull fresh Craftable data and cross-reference
+  btn.innerHTML='<span class="spin">\u27F3</span> Count 2: Pulling fresh Craftable AVT...';
+
+  // Try auto-pull from bot first
+  let botOk=false;
+  try{
+    const check=await fetch(`${CRAFT_BOT}/status`,{signal:AbortSignal.timeout(3000)});
+    if(check.ok)botOk=true;
+  }catch(e){}
+
+  if(botOk){
+    try{
+      const dlRes=await fetch(`${CRAFT_BOT}/download?store=all`);
+      const dlData=await dlRes.json();
+      if(dlData.ok){
+        btn.innerHTML='<span class="spin">\u27F3</span> Bot downloading fresh AVT report...';
+        // Poll until done
+        for(let i=0;i<60;i++){
+          await new Promise(r=>setTimeout(r,3000));
+          try{
+            const poll=await fetch(`${CRAFT_BOT}/status`);
+            const st=await poll.json();
+            btn.innerHTML=`<span class="spin">\u27F3</span> Bot: ${st.status}`;
+            if(st.status.startsWith('done:')){
+              btn.innerHTML='<span class="spin">\u27F3</span> Importing fresh Craftable data...';
+              const fileRes=await fetch(`${CRAFT_BOT}/file`);
+              if(fileRes.ok){
+                const blob=await fileRes.blob();
+                if(typeof XLSX==='undefined'){
+                  await new Promise((resolve,reject)=>{
+                    const s=document.createElement('script');
+                    s.src='https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
+                    s.onload=resolve;s.onerror=reject;
+                    document.head.appendChild(s);
+                  });
+                }
+                const fakeEvent={target:{files:[new File([blob],'avt_recount.xlsx',{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'})]}};
+                importCSV(fakeEvent);
+              }
+              break;
+            }
+            if(st.status.startsWith('error:'))break;
+          }catch(e){}
+        }
+      }
+    }catch(e){
+      console.warn('Bot auto-pull failed:',e.message);
+    }
+  }
+
+  // Cross-reference runs automatically via importCSV → crossRef
+  // Count resolved items
+  const resolved=S.items.filter(i=>i.resolved&&(i.venue===venue||!venue));
+  const unresolvedRC=S.items.filter(i=>!i.resolved&&i.recount&&(i.venue===venue||!venue));
+
+  if(resolved.length>0){
+    const existingHtml=res.innerHTML;
+    res.innerHTML=existingHtml+`<div style="margin-top:12px;padding:10px;background:rgba(45,106,79,0.15);border:1px solid rgba(45,106,79,0.3);border-radius:6px"><strong style="color:var(--success)">\u2713 Count 2 Complete:</strong> ${resolved.length} item(s) RESOLVED after recount. ${unresolvedRC.length} still need attention.</div>`;
+  }
+}
+
+// ═══════════════════════════════════════════════════
 //  PARSE HANDLER
 // ═══════════════════════════════════════════════════
 async function handleParse(){
@@ -1648,8 +1736,18 @@ async function handleParse(){
     html+='</div>';showRes(res,true,html);
     document.getElementById('msgIn').value='';
     pendingImages=[];renderImagePreviews();
+
+    // Count 2: auto-pull fresh Craftable and cross-reference for resolution detection
+    const phase=document.getElementById('countPhase').value;
+    if(phase==='2'){
+      await runCount2PostProcess(venue,btn,res);
+    }
   }catch(e){showRes(res,false,'Error: '+e.message)}
-  finally{btn.disabled=false;btn.textContent='Parse & Add Issues'}
+  finally{
+    btn.disabled=false;
+    const phase=document.getElementById('countPhase').value;
+    btn.textContent=phase==='2'?'Parse & Run Recount':'Parse & Add Issues';
+  }
 }
 
 function showRes(el,ok,html){el.className='result '+(ok?'ok':'err');el.innerHTML=html;el.style.display='block'}
