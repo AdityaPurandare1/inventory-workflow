@@ -529,7 +529,7 @@ async function pullFromSlack(){
 
     // Step 2: Pull messages from today (last 24 hours)
     const now=Math.floor(Date.now()/1000);
-    const oldest=now-86400; // 24 hours ago
+    const oldest=now-604800; // 7 days ago (covers full week between counts)
     let allMessages=[];
     let cursor='';
     for(let page=0;page<10;page++){
@@ -1280,6 +1280,18 @@ WATCH OUT for product names that look like common phrases but ARE real products:
 - "Olive Juice" = a real prep item
 Treat the FIRST words before any size (ml/oz/L) or location as the product name.
 
+GROUPED FORMAT — Staff often list an issue type or location as a header, then products underneath:
+  "Not scanning
+   Game room:
+   Glenmorangie 18yr 750ml
+   Cockburns 10yr tawny port 750ml"
+→ ALL items under "Not scanning" inherit issue_type "Product not scanning" and location "Game room"
+  "No stickers, 2nd floor wine:
+   Chateau Pichon Baron 1998 750ml
+   Vega Sicilia 2001 750ml"
+→ ALL items inherit issue_type "No Sticker" and location "2nd floor wine"
+Look for these header patterns and apply the issue type to EVERY product listed below until the next header.
+
 ONLY skip a message if it has NO product name at all and just describes a location with a photo reference.
 
 When in doubt, INCLUDE the item. Combine duplicates. Return [] only if truly zero products named.
@@ -1424,11 +1436,29 @@ function venueMatch(a,b){
   if(!a||!b)return true;
   const na=normalize(a),nb=normalize(b);
   if(na===nb)return true;
-  if(na.includes(nb)||nb.includes(na))return true;
-  // Simple char overlap for venue names only
-  const sA=new Set(na.split('')),sB=new Set(nb.split(''));
-  let o=0;sA.forEach(c=>{if(sB.has(c))o++});
-  return(2*o)/(sA.size+sB.size)>=0.75;
+  // Strict substring check
+  const shorter=na.length<=nb.length?na:nb;
+  const longer=na.length>nb.length?na:nb;
+  if(longer.includes(shorter)&&shorter.length/longer.length>=0.5)return true;
+  // Word-level match — extract words (>1 char to keep "LA")
+  const wa=a.toLowerCase().replace(/[^a-z\s]/g,' ').split(/\s+/).filter(w=>w.length>1);
+  const wb=b.toLowerCase().replace(/[^a-z\s]/g,' ').split(/\s+/).filter(w=>w.length>1);
+  if(!wa.length||!wb.length)return false;
+  // Fuzzy single-char tolerance for typos (deliliah ↔ delilah)
+  function fuzzyEq(w1,w2){
+    if(w1===w2)return true;
+    if(Math.abs(w1.length-w2.length)>1)return false;
+    if(w1.length===w2.length){let d=0;for(let i=0;i<w1.length;i++)if(w1[i]!==w2[i])d++;return d<=1}
+    const s=w1.length<w2.length?w1:w2,l=w1.length>=w2.length?w1:w2;
+    let j=0,d=0;for(let i=0;i<l.length;i++){if(s[j]===l[i])j++;else d++;if(d>1)return false}return true;
+  }
+  // ALL words from shorter list must match something in longer list
+  const smallerArr=wa.length<=wb.length?wa:wb;
+  const largerArr=wa.length>wb.length?wa:wb;
+  for(const sw of smallerArr){
+    if(!largerArr.some(lw=>fuzzyEq(sw,lw)))return false;
+  }
+  return true;
 }
 
 function crossRef(){
@@ -1560,35 +1590,30 @@ async function handleParse(){
     let allIssues=[];
 
     if(hasText||hasImages){
-      if(hasImages && totalImages<=IMG_BATCH){
-        btn.innerHTML=`<span class="spin">⟳</span> Parsing text + ${totalImages} images...`;
-        const issues=await callWithRetry(hasText?msg:'',venue,pendingImages,'');
-        allIssues.push(...(issues||[]));
-      } else {
-        if(hasText){
-          btn.innerHTML=`<span class="spin">⟳</span> Parsing text...`;
-          const textIssues=await callWithRetry(msg,venue,null,'text');
-          allIssues.push(...(textIssues||[]));
-        }
+      // Always parse text separately from images for reliability
+      if(hasText){
+        btn.innerHTML=`<span class="spin">⟳</span> Parsing text...`;
+        const textIssues=await callWithRetry(msg,venue,null,'text');
+        allIssues.push(...(textIssues||[]));
+      }
 
-        if(hasImages){
-          const batches=[];
-          for(let i=0;i<totalImages;i+=IMG_BATCH){
-            batches.push(pendingImages.slice(i,i+IMG_BATCH));
-          }
-          for(let b=0;b<batches.length;b++){
-            // Wait between batches to avoid rate limits
-            if(b>0||(hasText)){
-              const waitSec=Math.ceil(BATCH_DELAY/1000);
-              for(let s=waitSec;s>0;s--){
-                btn.innerHTML=`<span class="spin">⟳</span> Waiting ${s}s before batch ${b+1}/${batches.length}...`;
-                await new Promise(r=>setTimeout(r,1000));
-              }
+      if(hasImages){
+        const batches=[];
+        for(let i=0;i<totalImages;i+=IMG_BATCH){
+          batches.push(pendingImages.slice(i,i+IMG_BATCH));
+        }
+        for(let b=0;b<batches.length;b++){
+          // Wait between batches (and after text parse) to avoid rate limits
+          if(b>0||hasText){
+            const waitSec=Math.ceil(BATCH_DELAY/1000);
+            for(let s=waitSec;s>0;s--){
+              btn.innerHTML=`<span class="spin">⟳</span> Waiting ${s}s before image batch ${b+1}/${batches.length}...`;
+              await new Promise(r=>setTimeout(r,1000));
             }
-            btn.innerHTML=`<span class="spin">⟳</span> Reading images ${b*IMG_BATCH+1}-${Math.min((b+1)*IMG_BATCH,totalImages)} of ${totalImages}...`;
-            const imgIssues=await callWithRetry('',venue,batches[b],`batch ${b+1}`);
-            allIssues.push(...(imgIssues||[]));
           }
+          btn.innerHTML=`<span class="spin">⟳</span> Reading images ${b*IMG_BATCH+1}-${Math.min((b+1)*IMG_BATCH,totalImages)} of ${totalImages}...`;
+          const imgIssues=await callWithRetry('',venue,batches[b],`batch ${b+1}`);
+          allIssues.push(...(imgIssues||[]));
         }
       }
     }
