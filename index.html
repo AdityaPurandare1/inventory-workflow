@@ -539,7 +539,7 @@ async function pullFromSlack(){
 
     // Step 2: Pull messages from today (last 24 hours)
     const now=Math.floor(Date.now()/1000);
-    const oldest=now-604800; // 7 days ago (covers full week between counts)
+    const oldest=now-172800; // 7 days ago (covers full week between counts)
     let allMessages=[];
     let cursor='';
     for(let page=0;page<10;page++){
