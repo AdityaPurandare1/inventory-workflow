@@ -2390,27 +2390,66 @@ function renderInitiate(){
     const i=r.item,st=r.state;
     const key=`${i.item_id}::${i.venue}::${i.week||weekLabel()}`;
     const repeatingTag=st.repeating?'<span style="background:#f59e0b;color:#000;font-size:8px;padding:1px 5px;border-radius:3px;font-weight:700;margin-left:4px">REPEATING</span>':'';
-    const statusTag=`<span style="font-size:9px;color:var(--text-muted)">${esc(i.craftable_status||i.issue_type||'')}</span>`;
+    const isSlack=i.issue_type!=='Craftable Variance'&&i.issue_type;
+    const sourceTag=isSlack?'<span style="background:#4A154B;color:#E8D5E0;font-size:8px;padding:1px 5px;border-radius:3px;font-weight:700;margin-right:4px">⚡ SLACK</span>':'<span style="background:#334155;color:#cbd5e1;font-size:8px;padding:1px 5px;border-radius:3px;font-weight:700;margin-right:4px">CATALOG</span>';
+    const statusTag=i.craftable_status?`<span style="font-size:9px;color:var(--text-muted)">${esc(i.craftable_status)}</span>`:'';
     const vc=i.variance_dollars<0?'vn':i.variance_dollars>0?'vp':'';
     const noteVal=st.note||'';
-    const tsLine=st.ts?`<div style="font-size:9px;color:var(--text-muted);margin-top:2px">Resolved ${new Date(st.ts).toLocaleString()}${st.initials?' · '+esc(st.initials):''}</div>`:'';
+    const tsLine=st.ts?`<div style="font-size:9px;color:var(--text-muted);margin-top:4px">Resolved ${new Date(st.ts).toLocaleString()}${st.initials?' · '+esc(st.initials):''}</div>`:'';
+    // Build the Issue cell — Slack-derived detail first, catalog explanation as fallback
+    const issueHtml=buildIssueDetail(i);
     return `<tr data-key="${esc(key)}">
       <td><input type="checkbox" ${st.resolved?'checked':''} onchange="onInitiateToggle('${esc(i.item_id)}','${esc(i.venue)}','${esc(i.week||weekLabel())}')" style="width:18px;height:18px;cursor:pointer"></td>
-      <td>${esc(i.venue)}</td>
-      <td><strong>${esc(i.item_name)}</strong>${repeatingTag}<div style="margin-top:2px">${statusTag}</div>${tsLine}</td>
+      <td style="font-size:11px">${esc(i.venue)}</td>
+      <td>${sourceTag}<strong>${esc(i.item_name)}</strong>${repeatingTag}<div style="margin-top:3px">${statusTag}</div>${tsLine}</td>
+      <td style="font-size:11px;max-width:340px">${issueHtml}</td>
       <td class="num ${vc}">${i.variance_dollars?fD(i.variance_dollars):'—'}</td>
       <td><input type="text" placeholder="Resolution note..." value="${esc(noteVal)}" oninput="onInitiateNote('${esc(i.item_id)}','${esc(i.venue)}','${esc(i.week||weekLabel())}',this.value)" style="width:100%;padding:4px 6px;font-size:11px;background:var(--bg-elevated);border:1px solid var(--border);border-radius:4px;color:var(--text)"></td>
     </tr>`;
   };
-  let html='<div class="tbl-wrap"><table><thead><tr><th style="width:40px">✓</th><th>Venue</th><th>Product</th><th>Var $</th><th>Resolution note</th></tr></thead><tbody>';
+  const tblHdr='<div class="tbl-wrap"><table><thead><tr><th style="width:40px">✓</th><th>Venue</th><th>Product</th><th>Issue</th><th>Var $</th><th>Resolution note</th></tr></thead><tbody>';
+  let html=tblHdr;
   unresolved.forEach(r=>html+=rowFor(r));
   html+='</tbody></table></div>';
   if(resolved.length){
-    html+=`<details style="margin-top:14px"><summary style="cursor:pointer;color:var(--text-muted);font-size:11px;padding:6px 0">Resolved this session (${resolved.length}) — click to expand</summary><div class="tbl-wrap" style="margin-top:6px"><table><thead><tr><th style="width:40px">✓</th><th>Venue</th><th>Product</th><th>Var $</th><th>Resolution note</th></tr></thead><tbody>`;
+    html+=`<details style="margin-top:14px"><summary style="cursor:pointer;color:var(--text-muted);font-size:11px;padding:6px 0">Resolved this session (${resolved.length}) — click to expand</summary><div class="tbl-wrap" style="margin-top:6px">${tblHdr.replace('<div class="tbl-wrap">','')}`;
     resolved.forEach(r=>html+=rowFor(r));
     html+='</tbody></table></div></details>';
   }
   c.innerHTML=html;
+}
+
+// Human-readable explanation of WHY an item landed on Initiate.
+// For Slack-sourced items: shows the AI-parsed issue_type, notes, location, quantity.
+// For catalog-level REVIEW statuses: shows what the counter needs to verify.
+const CATALOG_ISSUE_HELP={
+  'REVIEW — No Craftable Match':'No matching product in Craftable. Verify the product exists in the catalog — add it, or correct the name spelling at source.',
+  'REVIEW — No ID':'Product is flagged but has no Bevager ID. Ask a platform admin to assign the ID so future joins are reliable.',
+  'REVIEW — Low Confidence':'Weak fuzzy match to a Craftable product. Confirm this is the right item before treating the variance as valid.',
+  'REVIEW — Missing Actual/Theo':'Variance logged but actual and theoretical counts are both blank. Manual recount needed to establish the baseline.',
+  'NOT IN CRAFTABLE':'Product not in our Craftable catalog at all. Counter needs to confirm it physically exists at the venue.',
+  'Craftable Only — No ID':'Craftable returned a variance for this item but no stable ID. Ask admin to populate it.'
+};
+function buildIssueDetail(i){
+  const parts=[];
+  const isSlack=i.issue_type&&i.issue_type!=='Craftable Variance';
+  if(isSlack){
+    parts.push(`<div style="font-weight:600;color:var(--accent)">${esc(i.issue_type)}</div>`);
+    if(i.notes)parts.push(`<div style="margin-top:3px;color:var(--text)">${esc(i.notes)}</div>`);
+    const meta=[];
+    if(i.sub_location)meta.push(`📍 ${esc(i.sub_location)}`);
+    if(i.quantity)meta.push(`${esc(i.quantity)}× unit${Number(i.quantity)===1?'':'s'}`);
+    if(meta.length)parts.push(`<div style="margin-top:3px;font-size:10px;color:var(--text-muted)">${meta.join(' · ')}</div>`);
+  }
+  // Always surface the catalog-level explanation if present (applies to Slack items that couldn't be matched too)
+  const help=CATALOG_ISSUE_HELP[i.craftable_status||''];
+  if(help){
+    parts.push(`<div style="margin-top:${parts.length?'6px':'0'};padding:4px 6px;background:rgba(220,38,38,0.08);border-left:2px solid #dc2626;font-size:10px;line-height:1.35">${esc(help)}</div>`);
+  }
+  if(!parts.length){
+    parts.push(`<div style="color:var(--text-muted);font-style:italic">No issue context recorded.</div>`);
+  }
+  return parts.join('');
 }
 
 // INIT
