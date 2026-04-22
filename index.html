@@ -183,6 +183,7 @@ td.num{text-align:right;font-variant-numeric:tabular-nums}
 
   <div class="tabs">
     <button class="tab active" onclick="switchTab('parse')">Parse</button>
+    <button class="tab" onclick="switchTab('initiate')" title="Live issues — clear before the physical count">⚡ Initiate <span class="badge" id="iBadge" style="background:#dc2626">0</span></button>
     <button class="tab" onclick="switchTab('data')">Recount <span class="badge" id="cBadge">0</span></button>
     <button class="tab" onclick="switchTab('craftable')">Craftable</button>
     <button class="tab" onclick="switchTab('inventory')">Inventory</button>
@@ -237,6 +238,18 @@ Sarah: 2x Hendrick's Gin unaccounted, walk-in"></textarea>
     <div class="result" id="parseRes"></div>
   </div>
 
+  <!-- ═══ INITIATE — live issues to clear before the physical count ═══ -->
+  <div id="pnl-initiate" class="pnl">
+    <div class="stats" id="iStatsBar"></div>
+    <div class="tbl-ctrl">
+      <div class="left">
+        <select class="fsel" id="fIVen" onchange="renderInitiate()"><option value="">All Venues</option></select>
+        <span class="hint" style="font-size:10px;margin-left:8px;align-self:center">Clear these before starting the physical count. State persists across reloads.</span>
+      </div>
+    </div>
+    <div id="initiateTbl"></div>
+  </div>
+
   <!-- ═══ RECOUNT ═══ -->
   <div id="pnl-data" class="pnl">
     <div class="stats" id="statsBar"></div>
@@ -252,9 +265,10 @@ Sarah: 2x Hendrick's Gin unaccounted, walk-in"></textarea>
           <option value="">All Items</option><option value="yes">Recount Needed</option><option value="no">No Recount</option>
         </select>
       </div>
-      <div style="display:flex;gap:6px">
+      <div style="display:flex;gap:6px;flex-wrap:wrap">
         <button class="btn-s" onclick="exportCSV('recount')">&#8595; Recount CSV</button>
         <button class="btn-s" onclick="exportCSV('full')">&#8595; Full CSV</button>
+        <button class="btn-s" onclick="exportCounterRefresh()" title="Overlays this-week variance on last-week flagged items. Requires two imports.">&#8595; Counter Refresh</button>
         <button class="btn-s btn-dng" onclick="clearAll()">Clear</button>
       </div>
     </div>
@@ -401,12 +415,16 @@ Sarah: 2x Hendrick's Gin unaccounted, walk-in"></textarea>
 
     <div class="sg">
       <h3>Recount Thresholds</h3>
-      <p class="hint" style="margin:0 0 10px">Items above these thresholds get flagged for recount. Liquor and Wine have different thresholds.</p>
+      <p class="hint" style="margin:0 0 10px">An item is flagged if ANY of these is exceeded. Liquor and Wine dollar thresholds are independent.</p>
       <div class="row">
         <div class="field"><label>Liquor Min Variance ($)</label><input type="number" id="sThrLiquor" value="50" style="margin:0"></div>
         <div class="field"><label>Wine Min Variance ($)</label><input type="number" id="sThrWine" value="200" style="margin:0"></div>
       </div>
-      <div class="field" style="margin-top:8px"><label>Min Bottle Variance (all categories)</label><input type="number" id="sThrBottle" value="1" style="margin:0;max-width:200px"></div>
+      <div class="row" style="margin-top:8px">
+        <div class="field"><label>Min Bottle Variance (qty units)</label><input type="number" id="sThrBottle" value="1" style="margin:0"></div>
+        <div class="field"><label>Min Qty Variance (new dimension)</label><input type="number" id="sThrQtyUnits" value="1" style="margin:0"></div>
+        <div class="field"><label>Min Variance % (new dimension)</label><input type="number" id="sThrPct" value="10" style="margin:0"></div>
+      </div>
       <button class="btn-s" onclick="saveThr()" style="margin-top:6px">Save</button>
     </div>
 
@@ -426,24 +444,78 @@ Sarah: 2x Hendrick's Gin unaccounted, walk-in"></textarea>
 //  STATE
 // ═══════════════════════════════════════════════════
 const SK='hw_inv_v3';
-const DV=['Bird Streets Club','Delilah - LA','Deliliah - Miami','Keys','Poppy','The Nice Guy'];
+// Canonical venue list — any inbound spelling is mapped to one of these
+const DV=['Bird Street','Delilah LA','Delilah Miami','The Keys','The Nice Guy','Poppy','h.wood Catering'];
+// Alias → canonical. Keys are lowercased + punctuation-stripped via normalize().
+const VENUE_ALIASES={
+  'birdstreetsclub':'Bird Street','birdstreets':'Bird Street','birdstreet':'Bird Street','birdstreetclub':'Bird Street',
+  'delilahla':'Delilah LA','delilah':'Delilah LA','deliliahla':'Delilah LA','delilahlosangeles':'Delilah LA',
+  'delilahmiami':'Delilah Miami','deliliahmiami':'Delilah Miami',
+  'keys':'The Keys','keysclub':'The Keys','thekeys':'The Keys','thekeysclub':'The Keys',
+  'niceguy':'The Nice Guy','theniceguy':'The Nice Guy',
+  'poppy':'Poppy',
+  'hwoodcatering':'h.wood Catering','hwoodcater':'h.wood Catering','catering':'h.wood Catering',
+};
+function normalizeVenue(name){
+  if(!name)return '';
+  const key=String(name).toLowerCase().replace(/[^a-z0-9]/g,'');
+  if(VENUE_ALIASES[key])return VENUE_ALIASES[key];
+  // Fuzzy fallback — check each canonical against the normalized key
+  for(const canon of DV){
+    const ck=canon.toLowerCase().replace(/[^a-z0-9]/g,'');
+    if(ck===key||key.includes(ck)||ck.includes(key))return canon;
+  }
+  return String(name).trim(); // preserve unknown venue as-is so it surfaces in Settings
+}
 let S=ld();
-function ld(){try{const r=localStorage.getItem(SK);if(r){const p=JSON.parse(r);if(!p.slackToken)p.slackToken='';if(!p.threshLiquor)p.threshLiquor=50;if(!p.threshWine)p.threshWine=200;if(!p.threshBottle)p.threshBottle=1;return p}}catch(e){}return{apiBase:'https://api.craftable.com/v1',apiKey:'',authMethod:'bearer',githubPat:'',slackToken:'',venues:[...DV],items:[],craftData:[],threshLiquor:50,threshWine:200,threshBottle:1,threshD:100,threshW:3,interval:30,minVar:50,endpoints:{locations:'',variance:'',products:''},lastPull:null}}
+function ld(){
+  try{
+    const r=localStorage.getItem(SK);
+    if(r){
+      const p=JSON.parse(r);
+      if(!p.slackToken)p.slackToken='';
+      if(!p.threshLiquor)p.threshLiquor=50;
+      if(!p.threshWine)p.threshWine=200;
+      if(!p.threshBottle)p.threshBottle=1;
+      if(!p.threshPct)p.threshPct=10;
+      if(!p.threshQtyUnits)p.threshQtyUnits=1;
+      if(!p.initiate)p.initiate={};
+      if(!p.priorWeek)p.priorWeek=null;
+      // Dedupe venues under canonical spelling
+      if(Array.isArray(p.venues)){
+        const seen=new Set();p.venues=p.venues.map(v=>normalizeVenue(v)).filter(v=>{if(seen.has(v))return false;seen.add(v);return true});
+      }
+      // Normalize venue field on existing items (one-time migration)
+      if(Array.isArray(p.items))p.items.forEach(i=>{i.venue=normalizeVenue(i.venue)});
+      if(Array.isArray(p.craftData))p.craftData.forEach(i=>{i.venue=normalizeVenue(i.venue)});
+      return p;
+    }
+  }catch(e){}
+  return{apiBase:'https://api.craftable.com/v1',apiKey:'',authMethod:'bearer',githubPat:'',slackToken:'',venues:[...DV],items:[],craftData:[],threshLiquor:50,threshWine:200,threshBottle:1,threshPct:10,threshQtyUnits:1,threshD:100,threshW:3,interval:30,minVar:50,endpoints:{locations:'',variance:'',products:''},lastPull:null,avtGeneratedAt:null,initiate:{},priorWeek:null};
+}
 function sv(){try{localStorage.setItem(SK,JSON.stringify(S))}catch(e){}}
+
+// Stable item-ID: prefer AVT ID, fall back to canonical venue + normalized name.
+// This is the join key across imports (Bug 2 fix + WoW reconciliation).
+function stableItemId(rec){
+  const id=(rec.sku||rec.id||'').toString().trim();
+  if(id)return 'id:'+id;
+  return 'nm:'+normalizeVenue(rec.venue||'').toLowerCase().replace(/\s+/g,'')+'|'+String(rec.item_name||'').toLowerCase().replace(/[^a-z0-9]/g,'');
+}
 
 // ═══════════════════════════════════════════════════
 //  TABS
 // ═══════════════════════════════════════════════════
-const PANELS=['parse','data','craftable','inventory','api','settings'];
+const PANELS=['parse','initiate','data','craftable','inventory','api','settings'];
 function switchTab(n){
-  document.querySelectorAll('.tab').forEach((t,i)=>{t.classList.toggle('active',PANELS[i]===n);document.getElementById('pnl-'+PANELS[i]).classList.toggle('active',PANELS[i]===n)});
-  if(n==='data')renderData();if(n==='craftable')renderXRef();if(n==='inventory')renderInventory();if(n==='settings')renderSettings();
+  document.querySelectorAll('.tab').forEach((t,i)=>{t.classList.toggle('active',PANELS[i]===n);const el=document.getElementById('pnl-'+PANELS[i]);if(el)el.classList.toggle('active',PANELS[i]===n)});
+  if(n==='data')renderData();if(n==='initiate')renderInitiate();if(n==='craftable')renderXRef();if(n==='inventory')renderInventory();if(n==='settings')renderSettings();
 }
 
 // ═══════════════════════════════════════════════════
 //  VENUES
 // ═══════════════════════════════════════════════════
-function renderVS(){['locSel','fVen','cVen'].forEach(id=>{const el=document.getElementById(id);if(!el)return;const c=el.value,f=el.options[0].text;el.innerHTML=`<option value="">${f}</option>`;S.venues.forEach(v=>{const o=document.createElement('option');o.value=v;o.textContent=v;el.appendChild(o)});if(c&&S.venues.includes(c))el.value=c})}
+function renderVS(){['locSel','fVen','cVen','fIVen'].forEach(id=>{const el=document.getElementById(id);if(!el)return;const c=el.value,f=el.options[0].text;el.innerHTML=`<option value="">${f}</option>`;S.venues.forEach(v=>{const o=document.createElement('option');o.value=v;o.textContent=v;el.appendChild(o)});if(c&&S.venues.includes(c))el.value=c})}
 function toggleAdd(){document.getElementById('addBox').classList.toggle('open');document.getElementById('newLN').focus()}
 function addLoc(){const n=document.getElementById('newLN').value.trim();if(!n)return;if(S.venues.some(v=>v.toLowerCase()===n.toLowerCase())){toast('Exists');return}S.venues.push(n);sv();renderVS();document.getElementById('locSel').value=n;document.getElementById('addBox').classList.remove('open');document.getElementById('newLN').value='';toast('Added: '+n)}
 function removeLoc(nm){S.venues=S.venues.filter(v=>v!==nm);sv();renderVS();renderSettings()}
@@ -459,6 +531,8 @@ function renderSettings(){
   document.getElementById('apiKeyExplorer').value=S.apiKey;document.getElementById('apiBase').value=S.apiBase;
   document.getElementById('sInterval').value=S.interval;document.getElementById('sMinVar').value=S.minVar;
   document.getElementById('sThrLiquor').value=S.threshLiquor||50;document.getElementById('sThrWine').value=S.threshWine||200;document.getElementById('sThrBottle').value=S.threshBottle||1;
+  const pEl=document.getElementById('sThrPct');if(pEl)pEl.value=S.threshPct||10;
+  const qEl=document.getElementById('sThrQtyUnits');if(qEl)qEl.value=S.threshQtyUnits||1;
   document.getElementById('sEpLoc').value=S.endpoints.locations||'';
   document.getElementById('sEpVar').value=S.endpoints.variance||'';
   document.getElementById('sEpProd').value=S.endpoints.products||'';
@@ -469,21 +543,38 @@ function saveAPI(){S.apiBase=document.getElementById('sApiBase').value.trim().re
 function saveGithubPat(){S.githubPat=document.getElementById('sGithubPat').value.trim();sv();toast('GitHub token saved')}
 function saveSlackToken(){S.slackToken=document.getElementById('sSlackToken').value.trim();sv();toast('Slack token saved')}
 function saveAuto(){S.interval=parseInt(document.getElementById('sInterval').value)||0;S.minVar=parseFloat(document.getElementById('sMinVar').value)||50;sv();setupAutoPull();toast('Automation saved')}
-function saveThr(){S.threshLiquor=parseFloat(document.getElementById('sThrLiquor').value)||50;S.threshWine=parseFloat(document.getElementById('sThrWine').value)||200;S.threshBottle=parseFloat(document.getElementById('sThrBottle').value)||1;sv();toast('Thresholds saved')}
+function saveThr(){
+  S.threshLiquor=parseFloat(document.getElementById('sThrLiquor').value)||50;
+  S.threshWine=parseFloat(document.getElementById('sThrWine').value)||200;
+  S.threshBottle=parseFloat(document.getElementById('sThrBottle').value)||1;
+  const pEl=document.getElementById('sThrPct');if(pEl)S.threshPct=parseFloat(pEl.value)||10;
+  const qEl=document.getElementById('sThrQtyUnits');if(qEl)S.threshQtyUnits=parseFloat(qEl.value)||1;
+  sv();
+  // Re-score so the new thresholds take effect immediately
+  S.items.forEach(i=>{i.severity=scoreSev(i);i.recount=i.resolved?false:needsRC(i)});
+  sv();renderData();updateBadge();
+  toast('Thresholds saved · re-scored '+S.items.length+' items');
+}
 function saveEndpoints(){S.endpoints.locations=document.getElementById('sEpLoc').value.trim();S.endpoints.variance=document.getElementById('sEpVar').value.trim();S.endpoints.products=document.getElementById('sEpProd').value.trim();sv();toast('Endpoints saved')}
 
 // ═══════════════════════════════════════════════════
 //  SLACK INTEGRATION — Pull messages + images
 // ═══════════════════════════════════════════════════
 const SLACK_PROXY='https://slack-proxy.apurandare.workers.dev';
+// Keyed on canonical venue name (see DV / normalizeVenue).
 const VENUE_CHANNELS={
-  'Bird Streets Club':'issues-birdstreetsclub',
-  'Delilah - LA':'issues-delilah-la',
-  'Deliliah - Miami':'issues-delilah-miami',
-  'Keys':'issues-keysclub',
+  'Bird Street':'issues-birdstreetsclub',
+  'Delilah LA':'issues-delilah-la',
+  'Delilah Miami':'issues-delilah-miami',
+  'The Keys':'issues-keysclub',
   'Poppy':'issues-poppy',
   'The Nice Guy':'issues-theniceguy',
+  'h.wood Catering':'issues-hwood-catering',
 };
+function slackChannelFor(venue){
+  const canon=normalizeVenue(venue);
+  return VENUE_CHANNELS[canon]||null;
+}
 
 async function slackAPI(method,params={}){
   const qs=Object.entries(params).map(([k,v])=>`${k}=${encodeURIComponent(v)}`).join('&');
@@ -503,7 +594,7 @@ async function pullFromSlack(){
   if(!venue){status.style.display='block';status.textContent='Select a venue first.';status.style.color='var(--error)';return}
   if(!S.slackToken){status.style.display='block';status.textContent='Add your Slack token in Settings.';status.style.color='var(--error)';return}
 
-  const channelName=VENUE_CHANNELS[venue];
+  const channelName=slackChannelFor(venue);
   if(!channelName){status.style.display='block';status.textContent=`No Slack channel mapped for "${venue}". Add mapping in code.`;status.style.color='var(--error)';return}
 
   btn.disabled=true;
@@ -934,16 +1025,17 @@ async function pullCraftable(){
       ));
       return v>=minVar;
     }).map(i=>{
-      const venue=store||i.store||i.store_name||i.location||i.location_name||
+      const rawVenue=store||i.store||i.store_name||i.location||i.location_name||
         i.venue||i.establishment_name||storeName||'Unknown';
-      return{
-        venue,
+      const rec={
+        venue:normalizeVenue(rawVenue),
         item_name:i.name||i.product_name||i.item_name||i.product||i.description||'Unknown',
-        sku:i.sku||i.product_id||i.upc||i.item_id||'',
+        sku:(i.sku||i.product_id||i.upc||i.item_id||'').toString().trim(),
         variance_dollars:parseFloat(i.variance_amt||i.variance_amount||i.variance_cost||
           i.variance_value||i.variance_dollars||i.cost_variance||i.variance||0),
         variance_pct:parseFloat(i.variance_pct||i.variance_percent||i.variance_percentage||
           i['variance_%']||i.pct_variance||0),
+        variance_qty:parseFloat(i.variance_qty||i.quantity_variance||i.qty_variance||0),
         category:i.category||i.cost_category||i.category_name||i.group||'',
         actual_amount:parseFloat(i.actual_amount||i.actual||i.actual_cost||0),
         theo_amount:parseFloat(i.theo_amount||i.theoretical||i.theoretical_amount||
@@ -951,8 +1043,12 @@ async function pullCraftable(){
         starting_inventory:parseFloat(i.starting_inventory||i.opening||i.start_inv||0),
         purchases:parseFloat(i.purchases||i.received||0),
         depletions:parseFloat(i.depletions||i.usage||i.sold||0),
+        waste:parseFloat(i.waste||i.wastage||i.spillage||0),
+        cu_price:parseFloat(i.cu_price||i.unit_cost||i.cost_per_unit||i.unit_price||0),
         period:periodInfo||period
       };
+      rec.item_id=stableItemId(rec);
+      return rec;
     });
 
     // Auto-detect store name and add to venues if new
@@ -967,6 +1063,7 @@ async function pullCraftable(){
       renderVS();
     }
 
+    if(S.craftData&&S.craftData.length)snapshotPriorWeek();
     S.craftData=items;S.lastPull=new Date().toISOString();sv();
     crossRef();
     const storeLabel=items.length>0?[...new Set(items.map(i=>i.venue))].join(', '):'';
@@ -1020,11 +1117,17 @@ function processXLSX(data){
 
     // Find the header row — look for row containing "ITEM" or "STORE"
     let headerIdx=-1;
+    let avtGeneratedAt=null;
     for(let i=0;i<Math.min(15,rows.length);i++){
       const row=rows[i].map(c=>String(c).trim().toUpperCase());
+      // Capture AVT generation timestamp if present in pre-header rows (Improvement E)
+      const rawJoined=rows[i].map(c=>String(c)).join(' ');
+      const m=rawJoined.match(/(?:generated|report date|pulled|as of)[:\s]+([0-9]{1,4}[-/][0-9]{1,2}[-/][0-9]{1,4}(?:[ T][0-9:]+)?)/i);
+      if(m&&!avtGeneratedAt)avtGeneratedAt=m[1];
       if(row.includes('ITEM')||row.includes('PRODUCT')||row.some(c=>c.includes('ITEM'))){headerIdx=i;break}
     }
     if(headerIdx<0)throw new Error('Could not find column headers. Expected a row with ITEM or PRODUCT.');
+    S.avtGeneratedAt=avtGeneratedAt||S.avtGeneratedAt;
 
     const hdrs=rows[headerIdx].map(c=>String(c).trim().toLowerCase().replace(/\s+/g,' '));
     const dataRows=rows.slice(headerIdx+1);
@@ -1061,7 +1164,8 @@ function processXLSX(data){
       // Forward-fill store name (Craftable only puts it on first row of each store group)
       const rawStore=String(row[C.store]||'').trim();
       if(rawStore)lastStore=rawStore;
-      const store=lastStore||document.getElementById('cVen').value||'Unknown';
+      const rawStoreResolved=lastStore||document.getElementById('cVen').value||'Unknown';
+      const store=normalizeVenue(rawStoreResolved); // Bug 1: canonical venue at ingest
 
       const itemName=String(row[C.item]||'').trim();
       if(!itemName)continue;
@@ -1078,7 +1182,7 @@ function processXLSX(data){
 
       if(Math.abs(varDollars)<minV&&C.varValue>=0)continue;
 
-      items.push({
+      const rec={
         venue:store,
         item_name:itemName,
         sku:C.id>=0?String(row[C.id]||'').trim():'',
@@ -1094,15 +1198,20 @@ function processXLSX(data){
         cu_price:num(C.cuPrice),
         variance_qty:variance,
         period:'imported'
-      });
+      };
+      rec.item_id=stableItemId(rec);
+      items.push(rec);
     }
 
     const stores=[...new Set(items.map(i=>i.venue).filter(v=>v&&v!=='Unknown'))];
     for(const ds of stores){if(!S.venues.some(v=>normalize(v)===normalize(ds))){S.venues.push(ds)}}
     renderVS();
 
+    // Snapshot prior AVT before overwriting (Bug 4 — WoW reconciliation)
+    if(S.craftData&&S.craftData.length)snapshotPriorWeek();
     S.craftData=items;S.lastPull=new Date().toISOString();sv();crossRef();
-    showCR(true,`&#10003; Imported ${items.length} variance items from ${stores.join(', ')||'file'} (${dataRows.length} total rows scanned, ${items.length} above $${minV} threshold).`);
+    const tsNote=S.avtGeneratedAt?` · AVT generated ${S.avtGeneratedAt}`:'';
+    showCR(true,`&#10003; Imported ${items.length} variance items from ${stores.join(', ')||'file'} (${dataRows.length} total rows scanned, ${items.length} above $${minV} threshold)${tsNote}.`);
     renderXRef();
   }catch(err){showCR(false,'XLSX import error: '+err.message)}
 }
@@ -1111,15 +1220,19 @@ function processCSVText(text){
   try{
     const allLines=text.split('\n').map(l=>l.trim()).filter(l=>l);
 
-    // Find header row — skip title/metadata rows
+    // Find header row — skip title/metadata rows, capture AVT generation timestamp
     let headerIdx=0;
+    let avtGeneratedAt=null;
     for(let i=0;i<Math.min(15,allLines.length);i++){
       const upper=allLines[i].toUpperCase();
+      const m=allLines[i].match(/(?:generated|report date|pulled|as of)[:\s,"]+([0-9]{1,4}[-/][0-9]{1,2}[-/][0-9]{1,4}(?:[ T][0-9:]+)?)/i);
+      if(m&&!avtGeneratedAt)avtGeneratedAt=m[1];
       if(upper.includes('ITEM')||upper.includes('PRODUCT')||upper.includes('STORE')){
         const cols=csvLine(allLines[i]);
         if(cols.length>=5){headerIdx=i;break}
       }
     }
+    S.avtGeneratedAt=avtGeneratedAt||S.avtGeneratedAt;
 
     const hdrs=csvLine(allLines[headerIdx]).map(h=>h.toLowerCase().trim().replace(/\s+/g,' '));
     const col=(keywords)=>hdrs.findIndex(h=>keywords.some(k=>h.includes(k)));
@@ -1142,6 +1255,9 @@ function processCSVText(text){
     const items=[];
     let lastStore='';
 
+    // CSV path also needs a WASTE column index for parity with XLSX
+    const wI=col(['waste']);
+    const trI=col(['transfer']);
     for(let i=headerIdx+1;i<allLines.length;i++){
       const c=csvLine(allLines[i]);
       const rawStore=sI>=0?String(c[sI]||'').trim():'';
@@ -1154,20 +1270,26 @@ function processCSVText(text){
       const vd=num(vI);
       if(Math.abs(vd)<minV&&vI>=0)continue;
 
-      items.push({
-        venue:lastStore||document.getElementById('cVen').value||'Unknown',
+      const rawStoreResolved=lastStore||document.getElementById('cVen').value||'Unknown';
+      const rec={
+        venue:normalizeVenue(rawStoreResolved),
         item_name:itemName,sku:skI>=0?String(c[skI]||'').trim():'',
         variance_dollars:vd,variance_pct:num(vpI),category:cI>=0?String(c[cI]||'').trim():'',
         actual_amount:num(actI),theo_amount:num(theoI),starting_inventory:num(startI),
-        purchases:num(purI),depletions:num(depI),cu_price:num(prI),variance_qty:num(varQI),
+        purchases:num(purI),depletions:num(depI),waste:num(wI),transfers:num(trI),
+        cu_price:num(prI),variance_qty:num(varQI),
         period:'imported'
-      });
+      };
+      rec.item_id=stableItemId(rec);
+      items.push(rec);
     }
     const stores=[...new Set(items.map(i=>i.venue).filter(v=>v&&v!=='Unknown'))];
     for(const ds of stores){if(!S.venues.some(v=>normalize(v)===normalize(ds))){S.venues.push(ds)}}
     renderVS();
+    if(S.craftData&&S.craftData.length)snapshotPriorWeek();
     S.craftData=items;S.lastPull=new Date().toISOString();sv();crossRef();
-    showCR(true,`&#10003; Imported ${items.length} items${stores.length?' from '+stores.join(', '):''}.`);
+    const tsNote=S.avtGeneratedAt?` · AVT generated ${S.avtGeneratedAt}`:'';
+    showCR(true,`&#10003; Imported ${items.length} items${stores.length?' from '+stores.join(', '):''}${tsNote}.`);
     renderXRef();
   }catch(err){showCR(false,'CSV import error: '+err.message)}
 }
@@ -1370,31 +1492,47 @@ CRITICAL: Return ONLY a valid JSON array. No explanation, no prose, no markdown.
 //  SCORING
 // ═══════════════════════════════════════════════════
 function isWine(i){const c=String(i.category||'').toLowerCase();return c.includes('5320')||c.includes('wine')}
+// Multi-dimensional flag check — any ONE dimension trips the flag (Improvement B).
+// Returns {flagged, dims: {d$, dQty, dPct}} so callers can explain WHY an item was caught.
+function dimCheck(i){
+  const wine=isWine(i);
+  const varThresh=wine?(S.threshWine||200):(S.threshLiquor||50);
+  const qtyThresh=S.threshQtyUnits||S.threshBottle||1;
+  const pctThresh=S.threshPct||10;
+  const v=Math.abs(i.variance_dollars||0);
+  const q=Math.abs(i.variance_qty||0);
+  const p=Math.abs(i.variance_pct||0);
+  const d$=v>=varThresh;
+  const dQty=q>=qtyThresh;
+  const dPct=p>=pctThresh;
+  return{flagged:d$||dQty||dPct,d$,dQty,dPct};
+}
 function scoreSev(i){
   const w=i.weeks_flagged||1,v=Math.abs(i.variance_dollars||0),a=i.still_active!==false;
   const q=Math.abs(i.variance_qty||0);
+  const p=Math.abs(i.variance_pct||0);
   const wine=isWine(i);
   const varThresh=wine?(S.threshWine||200):(S.threshLiquor||50);
-  const qtyThresh=S.threshBottle||1;
+  const qtyThresh=S.threshQtyUnits||S.threshBottle||1;
+  const pctThresh=S.threshPct||10;
+  const dc=dimCheck(i);
 
   // Multi-week severity (for historical tracking across weeks)
   if(a&&w>=15)return'CRITICAL';if(a&&w>=10)return'CRITICAL';if(a&&w>=5&&v>=varThresh*4)return'CRITICAL';
   if(!a&&w>=5&&v>=varThresh*10)return'HIGH';if(a&&w>=5)return'HIGH';
   if(a&&w>=3)return'MEDIUM';
 
-  // Single-week severity (primary use case — 1 week of data)
-  // Dollar variance is the primary trigger, respecting category thresholds
-  if(v>=varThresh*10)return'HIGH'; // 10x threshold = HIGH
-  if(v>=varThresh)return'MEDIUM'; // Dollar variance meets category threshold
-  // Bottle variance: only for liquor (not wine) — wine uses dollar threshold only
-  if(!wine&&q>=qtyThresh&&v>=(S.threshLiquor||50))return'MEDIUM';
+  // Single-week severity — ANY dimension trips MEDIUM; $-only extremes escalate to HIGH
+  if(v>=varThresh*10)return'HIGH';      // 10x dollar threshold = HIGH regardless
+  if(p>=pctThresh*5)return'HIGH';       // 50% variance = HIGH
+  if(dc.flagged)return'MEDIUM';         // Any dimension caught it
   if(a&&w>=2)return'WATCH';
   return'LOW';
 }
 function needsRC(i){
   const s=i.severity;
   if(s==='CRITICAL'||s==='HIGH')return true;
-  if(s==='MEDIUM')return true; // All MEDIUM items need recount (they met the threshold)
+  if(s==='MEDIUM')return true; // All MEDIUM items need recount (they met at least one threshold)
   return false;
 }
 function normalize(s){return String(s||'').toLowerCase().replace(/[^a-z0-9]/g,'')}
@@ -1425,19 +1563,24 @@ function similarity(a,b){
   // Word-level matching (remove size tokens)
   const wa=new Set(a.split(/\s+/).filter(w=>!SIZE_TOKENS.has(w)&&w.length>1));
   const wb=new Set(b.split(/\s+/).filter(w=>!SIZE_TOKENS.has(w)&&w.length>1));
-  if(!wa.size||!wb.size)return 0;
-  let overlap=0;wa.forEach(w=>{if(wb.has(w))overlap++});
-  if(!overlap)return 0;
-  // Require at least one meaningful overlapping word (>2 chars)
-  let hasMeaningful=false;wa.forEach(w=>{if(wb.has(w)&&w.length>2)hasMeaningful=true});
-  if(!hasMeaningful)return 0;
-  const wordScore=(2*overlap)/(wa.size+wb.size);
-  // Trigram check for brand misspellings
+  // Trigram set once — used by word branch AND as a rescue when no word overlaps
   const triA=new Set(),triB=new Set();
   for(let i=0;i<a.length-2;i++)triA.add(a.slice(i,i+3));
   for(let i=0;i<b.length-2;i++)triB.add(b.slice(i,i+3));
   let triOvlp=0;triA.forEach(t=>{if(triB.has(t))triOvlp++});
   const triScore=triA.size&&triB.size?(2*triOvlp)/(triA.size+triB.size):0;
+  // If no words on either side, trigrams are the only signal available.
+  if(!wa.size||!wb.size)return triScore;
+  let overlap=0;wa.forEach(w=>{if(wb.has(w))overlap++});
+  if(!overlap){
+    // No shared word — rescue brand misspellings via trigrams (e.g. "Hennesy" vs "Hennessy").
+    // Cap at 0.6 so a pure-trigram match lands in REVIEW, not CONFIRMED.
+    return Math.min(triScore,0.6);
+  }
+  // Require at least one meaningful overlapping word (>2 chars)
+  let hasMeaningful=false;wa.forEach(w=>{if(wb.has(w)&&w.length>2)hasMeaningful=true});
+  if(!hasMeaningful)return triScore;
+  const wordScore=(2*overlap)/(wa.size+wb.size);
   return Math.max(wordScore,triScore);
 }
 const SIM_THRESHOLD=0.42;
@@ -1474,12 +1617,13 @@ function venueMatch(a,b){
 function crossRef(){
   if(!S.craftData.length)return;
 
-  // Build a lookup of ALL Craftable items (including those below threshold)
-  // This is used to detect resolved items — if an item exists in Craftable
-  // with zero/low variance, the recount fixed it
-  const allCraftByName=new Map();
+  // Build lookups: by ID (the stable join key) and by venue|name (fallback bucket).
+  const craftById=new Map();
+  const craftByVenueName=new Map();
   for(const cv of S.craftData){
-    allCraftByName.set(normalize(cv.item_name),cv);
+    cv.item_id=cv.item_id||stableItemId(cv);
+    if(cv.sku)craftById.set(String(cv.sku).trim(),cv);
+    craftByVenueName.set(`${normalize(cv.venue)}|${normalize(cv.item_name)}`,cv);
   }
 
   // Step 1: Cross-reference existing Slack-parsed items against Craftable
@@ -1492,65 +1636,144 @@ function crossRef(){
       item.severity=scoreSev(item);item.recount=needsRC(item);
       continue;
     }
-    const itype=(item.issue_type||'').toLowerCase();
-    const isNotInCraftable=itype.includes('not in craftable');
 
-    const nn=item.item_name.toLowerCase();let best=null,bs=0;
+    let best=null,bs=0,matchVia='';
 
-    // Try to match against ALL Craftable data (not just high-variance)
-    for(const cv of S.craftData){
-      if(!venueMatch(item.venue,cv.venue))continue;
-      const sc=similarity(nn,cv.item_name.toLowerCase());
-      if(sc>bs&&sc>=SIM_THRESHOLD){bs=sc;best=cv}
+    // Step 1a — ID join (preferred). Requires same canonical venue.
+    if(item.sku&&craftById.has(String(item.sku).trim())){
+      const byId=craftById.get(String(item.sku).trim());
+      if(venueMatch(item.venue,byId.venue)){best=byId;bs=1.0;matchVia='id'}
+    }
+
+    // Step 1b — Fuzzy fallback against AVT ITEM within the same canonical venue.
+    if(!best){
+      const nn=item.item_name.toLowerCase();
+      for(const cv of S.craftData){
+        if(!venueMatch(item.venue,cv.venue))continue;
+        const sc=similarity(nn,cv.item_name.toLowerCase());
+        if(sc>bs&&sc>=SIM_THRESHOLD){bs=sc;best=cv;matchVia='fuzzy'}
+      }
     }
 
     if(best){
+      item.item_id=best.item_id||stableItemId(best);
       item.variance_dollars=best.variance_dollars;
       item.variance_pct=best.variance_pct;
       item.variance_qty=best.variance_qty||0;
       item.actual_amount=best.actual_amount||0;
       item.theo_amount=best.theo_amount||0;
       item.cu_price=best.cu_price||0;
+      item.depletions=best.depletions||0;
+      item.waste=best.waste||0;
       item.craftable_match=best.item_name;
-      item.craftable_status=bs>=0.7?'YES — In Craftable':'REVIEW — Low Confidence';
+      if(matchVia==='id')item.craftable_status='YES — In Craftable';
+      else if(bs>=0.9)item.craftable_status='YES — In Craftable';
+      else item.craftable_status='REVIEW — Low Confidence';
       item.category=best.category||item.category;
+      // WoW reconciliation tag (Improvement F)
+      const wowPrior=getPriorWeekRecord(item.item_id);
+      const wowTag=computeWowTag(best,wowPrior);
+      item.wow_tag=wowTag.tag;
+      item.prior_variance_dollars=wowPrior?wowPrior.variance_dollars:null;
+      if(wowPrior&&wowPrior.weeks_flagged)item.weeks_flagged=(wowPrior.weeks_flagged||1)+1;
 
-      // RESOLUTION CHECK: If Slack flagged this but Craftable shows
-      // zero/low variance after recount → it's RESOLVED
+      // RESOLUTION CHECK: Slack flagged, Craftable now shows low variance → RESOLVED
       const wine=isWine(item);
       const varThresh=wine?(S.threshWine||200):(S.threshLiquor||50);
       const absVar=Math.abs(best.variance_dollars||0);
       const absQty=Math.abs(best.variance_qty||0);
+      const pct=Math.abs(best.variance_pct||0);
 
-      if(absVar<varThresh&&absQty<(S.threshBottle||1)){
+      if(absVar<varThresh&&absQty<(S.threshQtyUnits||1)&&pct<(S.threshPct||10)){
         item.resolved=true;
         item.resolved_status='RESOLVED — Variance cleared after recount';
       }else{
         item.resolved=false;
       }
     }else{
-      item.craftable_status=item.craftable_status||'NOT IN CRAFTABLE';
-      // Items "not in Craftable" can't be resolved via variance check
-      // They stay unresolved unless manually cleared
+      // No match — make the gap visible instead of silently writing it to the report.
+      item.craftable_status=item.sku?'REVIEW — No Craftable Match':'REVIEW — No ID';
       item.resolved=false;
     }
+
+    // Bug 3: if variance $ present but actual/theo both zero, flag for manual review
+    if(Math.abs(item.variance_dollars||0)>0&&(item.actual_amount||0)===0&&(item.theo_amount||0)===0){
+      item.craftable_status='REVIEW — Missing Actual/Theo';
+    }
+
     item.severity=scoreSev(item);item.recount=item.resolved?false:needsRC(item);
   }
 
-  // Step 2: Add Craftable-only items (not already matched) into S.items
-  const matchedCraftable=new Set();
-  S.items.forEach(i=>{if(i.craftable_match)matchedCraftable.add(normalize(i.craftable_match))});
+  // Step 2: Add Craftable-only items (not already matched) into S.items.
+  // Key on venue|name to avoid cross-venue leak (prior crossRef bug).
+  const matchedByKey=new Set();
+  S.items.forEach(i=>{
+    if(i.craftable_match)matchedByKey.add(`${normalize(i.venue)}|${normalize(i.craftable_match)}`);
+  });
   const now=new Date().toLocaleString(),wk=weekLabel();
   for(const cv of S.craftData){
-    if(matchedCraftable.has(normalize(cv.item_name)))continue;
-    const alreadyIn=S.items.some(i=>i.issue_type==='Craftable Variance'&&normalize(i.item_name)===normalize(cv.item_name)&&venueMatch(i.venue,cv.venue));
+    const key=`${normalize(cv.venue)}|${normalize(cv.item_name)}`;
+    if(matchedByKey.has(key))continue;
+    const alreadyIn=S.items.some(i=>i.issue_type==='Craftable Variance'&&normalize(i.item_name)===normalize(cv.item_name)&&normalize(i.venue)===normalize(cv.venue));
     if(alreadyIn)continue;
-    const obj={venue:cv.venue,item_name:cv.item_name,sku:'',issue_type:'Craftable Variance',sub_location:'',quantity:cv.variance_qty||0,notes:'',variance_dollars:cv.variance_dollars,variance_pct:cv.variance_pct,variance_qty:cv.variance_qty||0,actual_amount:cv.actual_amount||0,theo_amount:cv.theo_amount||0,cu_price:cv.cu_price||0,craftable_match:cv.item_name,craftable_status:'Craftable Only',weeks_flagged:1,repeat_status:'NEW',still_active:true,severity:'',recount:false,resolved:false,timestamp:now,week:wk,category:cv.category||''};
+    const wowPrior=getPriorWeekRecord(cv.item_id);
+    const wowTag=computeWowTag(cv,wowPrior);
+    const obj={venue:cv.venue,item_name:cv.item_name,sku:cv.sku||'',item_id:cv.item_id||stableItemId(cv),issue_type:'Craftable Variance',sub_location:'',quantity:cv.variance_qty||0,notes:'',variance_dollars:cv.variance_dollars,variance_pct:cv.variance_pct,variance_qty:cv.variance_qty||0,actual_amount:cv.actual_amount||0,theo_amount:cv.theo_amount||0,cu_price:cv.cu_price||0,depletions:cv.depletions||0,waste:cv.waste||0,craftable_match:cv.item_name,craftable_status:cv.sku?'Craftable Only':'Craftable Only — No ID',weeks_flagged:wowPrior?(wowPrior.weeks_flagged||1)+1:1,repeat_status:wowTag.repeat_status,wow_tag:wowTag.tag,prior_variance_dollars:wowPrior?wowPrior.variance_dollars:null,still_active:true,severity:'',recount:false,resolved:false,timestamp:now,week:wk,category:cv.category||''};
+    // Also flag Craftable-only items missing actual/theo
+    if(Math.abs(obj.variance_dollars||0)>0&&(obj.actual_amount||0)===0&&(obj.theo_amount||0)===0){
+      obj.craftable_status='REVIEW — Missing Actual/Theo';
+    }
     obj.severity=scoreSev(obj);obj.recount=needsRC(obj);
     S.items.push(obj);
   }
 
   S.items.sort((a,b)=>sevOrd(a.severity)-sevOrd(b.severity));sv();updateBadge();
+}
+
+// ═══════════════════════════════════════════════════
+//  WEEK-OVER-WEEK — prior-week snapshot & reconciliation tags (Bug 4 + Improvement F)
+// ═══════════════════════════════════════════════════
+function snapshotPriorWeek(){
+  if(!S.craftData.length)return;
+  S.priorWeek={
+    week:weekLabel(),
+    capturedAt:new Date().toISOString(),
+    avtGeneratedAt:S.avtGeneratedAt||null,
+    items:S.craftData.map(cv=>({
+      item_id:cv.item_id||stableItemId(cv),
+      venue:cv.venue,item_name:cv.item_name,sku:cv.sku||'',
+      variance_dollars:cv.variance_dollars||0,variance_pct:cv.variance_pct||0,variance_qty:cv.variance_qty||0,
+      actual_amount:cv.actual_amount||0,theo_amount:cv.theo_amount||0,
+      depletions:cv.depletions||0,waste:cv.waste||0,category:cv.category||'',
+      weeks_flagged:1
+    }))
+  };
+  sv();
+}
+function getPriorWeekRecord(itemId){
+  if(!S.priorWeek||!Array.isArray(S.priorWeek.items))return null;
+  return S.priorWeek.items.find(p=>p.item_id===itemId)||null;
+}
+function computeWowTag(cv,prior){
+  // Returns {tag, repeat_status}
+  const wine=isWine(cv);
+  const varThresh=wine?(S.threshWine||200):(S.threshLiquor||50);
+  const absVar=Math.abs(cv.variance_dollars||0);
+  const absPct=Math.abs(cv.variance_pct||0);
+  const absQty=Math.abs(cv.variance_qty||0);
+  const flaggedNow=absVar>=varThresh||absPct>=(S.threshPct||10)||absQty>=(S.threshQtyUnits||1);
+  if(!prior){
+    return{tag:flaggedNow?'New':'',repeat_status:'NEW'};
+  }
+  const priorAbs=Math.abs(prior.variance_dollars||0);
+  const priorFlagged=priorAbs>=varThresh||Math.abs(prior.variance_pct||0)>=(S.threshPct||10)||Math.abs(prior.variance_qty||0)>=(S.threshQtyUnits||1);
+  const weeks=(prior.weeks_flagged||1)+1;
+  const repeat_status=weeks>=15?'CHRONIC (15+)':weeks>=10?'PERSISTENT (10-14)':weeks>=5?'RECURRING (5-9)':weeks>=2?'REPEATING (2-4)':'NEW';
+  if(priorFlagged&&!flaggedNow)return{tag:'Resolved',repeat_status};
+  if(!priorFlagged&&flaggedNow)return{tag:'New',repeat_status:'NEW'};
+  if(absVar>priorAbs*1.1)return{tag:'Worsened',repeat_status};
+  if(absVar<priorAbs*0.9)return{tag:'Improved',repeat_status};
+  return{tag:'Persisting',repeat_status};
 }
 
 // ═══════════════════════════════════════════════════
@@ -1723,10 +1946,11 @@ async function handleParse(){
 
     if(!issues.length){showRes(res,false,failedBatches>0?`No issues found (${failedBatches} batch${failedBatches>1?'es':''} failed — try again with fewer images).`:'No issues found.');return}
     const now=new Date().toLocaleString(),wk=weekLabel();
+    const canonVenue=normalizeVenue(venue);
     for(const iss of issues){
-      const key=`${normalize(venue)}|${normalize(iss.item_name)}`;
+      const key=`${normalize(canonVenue)}|${normalize(iss.item_name)}`;
       const idx=S.items.findIndex(i=>`${normalize(i.venue)}|${normalize(i.item_name)}`===key);
-      const obj={venue,item_name:iss.item_name,sku:iss.sku||'',issue_type:iss.issue_type||'',sub_location:iss.location||'',quantity:iss.quantity||0,notes:iss.notes||'',variance_dollars:0,variance_pct:0,craftable_match:'',craftable_status:'',weeks_flagged:1,repeat_status:'NEW',still_active:true,severity:'',recount:false,timestamp:now,week:wk,category:''};
+      const obj={venue:canonVenue,item_name:iss.item_name,sku:iss.sku||'',item_id:stableItemId({venue:canonVenue,item_name:iss.item_name,sku:iss.sku||''}),issue_type:iss.issue_type||'',sub_location:iss.location||'',quantity:iss.quantity||0,notes:iss.notes||'',variance_dollars:0,variance_pct:0,craftable_match:'',craftable_status:'',weeks_flagged:1,repeat_status:'NEW',still_active:true,severity:'',recount:false,timestamp:now,week:wk,category:''};
       if(idx>=0){const old=S.items[idx];obj.weeks_flagged=(old.weeks_flagged||1)+1;obj.variance_dollars=old.variance_dollars||0;obj.variance_pct=old.variance_pct||0;obj.craftable_match=old.craftable_match||'';obj.craftable_status=old.craftable_status||'';obj.category=old.category||'';obj.repeat_status=obj.weeks_flagged>=15?'CHRONIC (15+)':obj.weeks_flagged>=10?'PERSISTENT (10-14)':obj.weeks_flagged>=5?'RECURRING (5-9)':obj.weeks_flagged>=2?'REPEATING (2-4)':'NEW';S.items[idx]=obj}else{S.items.push(obj)}
     }
     crossRef();
@@ -1774,18 +1998,42 @@ function renderXRef(){
 //  RECOUNT TABLE
 // ═══════════════════════════════════════════════════
 let sC=-1,sA=true;
+// Items with these statuses are "live issues" — surface to the top of the main tab (Improvement G).
+const LIVE_ISSUE_STATUSES=new Set(['NOT IN CRAFTABLE','REVIEW — Low Confidence','REVIEW — No Craftable Match','REVIEW — No ID','REVIEW — Missing Actual/Theo','Craftable Only — No ID']);
+function isLiveIssue(i){return LIVE_ISSUE_STATUSES.has(i.craftable_status||'')}
+
 function renderData(){
   const fv=document.getElementById('fVen').value,fs=document.getElementById('fSev').value,fr=document.getElementById('fRc').value;
-  let data=S.items.filter(i=>{if(fv&&i.venue!==fv)return false;if(fs&&i.severity!==fs)return false;if(fr==='yes'&&!i.recount)return false;if(fr==='no'&&i.recount)return false;return true});
+  let data=S.items.filter(i=>{if(fv&&normalize(i.venue)!==normalize(normalizeVenue(fv)))return false;if(fs&&i.severity!==fs)return false;if(fr==='yes'&&!i.recount)return false;if(fr==='no'&&i.recount)return false;return true});
+  // Live-issue priority sort: unresolved live issues first (by absolute variance desc), then everything else by current order.
+  if(sC<0){
+    data.sort((a,b)=>{
+      const la=isLiveIssue(a)&&!a.resolved?1:0,lb=isLiveIssue(b)&&!b.resolved?1:0;
+      if(la!==lb)return lb-la;
+      const sa=sevOrd(a.severity),sb=sevOrd(b.severity);
+      if(sa!==sb)return sa-sb;
+      return Math.abs(b.variance_dollars||0)-Math.abs(a.variance_dollars||0);
+    });
+  }
+  const liveCount=data.filter(i=>isLiveIssue(i)&&!i.resolved).length;
   const tot=data.length,rc=data.filter(i=>i.recount).length,cr=data.filter(i=>i.severity==='CRITICAL').length,tv=data.reduce((s,i)=>s+Math.abs(i.variance_dollars||0),0);
-  document.getElementById('statsBar').innerHTML=`<div class="stat"><div class="n">${tot}</div><div class="l">Total</div></div><div class="stat"><div class="n" style="color:var(--critical)">${rc}</div><div class="l">Recount</div></div><div class="stat"><div class="n" style="color:var(--critical)">${cr}</div><div class="l">Critical</div></div><div class="stat"><div class="n">${fD(tv)}</div><div class="l">Variance</div></div>`;
+  document.getElementById('statsBar').innerHTML=`<div class="stat"><div class="n">${tot}</div><div class="l">Total</div></div><div class="stat"><div class="n" style="color:var(--critical)">${rc}</div><div class="l">Recount</div></div><div class="stat"><div class="n" style="color:var(--critical)">${cr}</div><div class="l">Critical</div></div><div class="stat"><div class="n" style="color:#f59e0b">${liveCount}</div><div class="l">Live Issues</div></div><div class="stat"><div class="n">${fD(tv)}</div><div class="l">Variance</div></div>`;
   const c=document.getElementById('dataTbl');
   if(!data.length){c.innerHTML='<div class="empty"><span class="ico">&#128203;</span>No items match filters.</div>';return}
   const cols=[{k:'venue',l:'Venue'},{k:'item_name',l:'Product'},{k:'issue_type',l:'Issue'},{k:'sub_location',l:'Location'},{k:'actual_amount',l:'Actual',n:1},{k:'theo_amount',l:'Theo',n:1},{k:'quantity',l:'Var Qty',n:1},{k:'variance_dollars',l:'Var $',n:1},{k:'severity',l:'Severity'},{k:'recount',l:'Recount?'}];
   let html='<div class="tbl-wrap"><table><thead><tr>';
   cols.forEach((c,i)=>html+=`<th onclick="sortBy(${i})" class="${sC===i?'sorted':''}">${c.l}<span class="sa">${sC===i?(sA?'▲':'▼'):'↕'}</span></th>`);
   html+='</tr></thead><tbody>';
-  data.forEach(item=>{const vc=item.variance_dollars<0?'vn':item.variance_dollars>0?'vp':'';const isSlack=item.issue_type!=='Craftable Variance';const srcTag=isSlack?'<span style="background:#f59e0b;color:#000;font-size:8px;padding:1px 5px;border-radius:3px;font-weight:700;margin-right:4px">⚡ Initiatecare</span>':'';const rcCell=item.resolved?'<span style="background:#2d6a4f;color:#fff;font-size:9px;font-weight:700;padding:2px 8px;border-radius:3px">✓ RESOLVED</span>':item.recount?'<span class="recount-flag">RECOUNT</span>':'<span class="no-rc">—</span>';html+=`<tr${isSlack?' style="background:rgba(245,158,11,0.08)"':''}${item.resolved?' style="opacity:0.6"':''}><td>${esc(item.venue)}</td><td>${srcTag}<strong>${esc(item.item_name)}</strong>${item.craftable_status?`<div style="font-size:9px;color:var(--text-muted);margin-top:1px">${esc(item.craftable_status)}</div>`:''}</td><td style="font-size:10px">${esc(item.issue_type)}</td><td style="font-size:10px">${esc(item.sub_location)}</td><td class="num">${item.actual_amount?Number(item.actual_amount).toFixed(1):'—'}</td><td class="num">${item.theo_amount?Number(item.theo_amount).toFixed(1):'—'}</td><td class="num">${item.quantity||'—'}</td><td class="num ${vc}">${item.variance_dollars?fD(item.variance_dollars):'—'}</td><td><span class="sev sev-${item.severity}">${item.severity}</span></td><td>${rcCell}</td></tr>`});
+  data.forEach(item=>{
+    const vc=item.variance_dollars<0?'vn':item.variance_dollars>0?'vp':'';
+    const isSlack=item.issue_type!=='Craftable Variance';
+    const live=isLiveIssue(item)&&!item.resolved;
+    const srcTag=isSlack?'<span style="background:#f59e0b;color:#000;font-size:8px;padding:1px 5px;border-radius:3px;font-weight:700;margin-right:4px">⚡ Initiatecare</span>':'';
+    const liveTag=live?'<span style="background:#dc2626;color:#fff;font-size:8px;padding:1px 5px;border-radius:3px;font-weight:700;margin-right:4px">LIVE</span>':'';
+    const rcCell=item.resolved?'<span style="background:#2d6a4f;color:#fff;font-size:9px;font-weight:700;padding:2px 8px;border-radius:3px">✓ RESOLVED</span>':item.recount?'<span class="recount-flag">RECOUNT</span>':'<span class="no-rc">—</span>';
+    const rowStyle=live?' style="background:rgba(220,38,38,0.08);border-left:3px solid #dc2626"':(isSlack?' style="background:rgba(245,158,11,0.08)"':'')+(item.resolved?' style="opacity:0.6"':'');
+    html+=`<tr${rowStyle}><td>${esc(item.venue)}</td><td>${liveTag}${srcTag}<strong>${esc(item.item_name)}</strong>${item.craftable_status?`<div style="font-size:9px;color:var(--text-muted);margin-top:1px">${esc(item.craftable_status)}</div>`:''}</td><td style="font-size:10px">${esc(item.issue_type)}</td><td style="font-size:10px">${esc(item.sub_location)}</td><td class="num">${item.actual_amount?Number(item.actual_amount).toFixed(1):'—'}</td><td class="num">${item.theo_amount?Number(item.theo_amount).toFixed(1):'—'}</td><td class="num">${item.quantity||'—'}</td><td class="num ${vc}">${item.variance_dollars?fD(item.variance_dollars):'—'}</td><td><span class="sev sev-${item.severity}">${item.severity}</span></td><td>${rcCell}</td></tr>`;
+  });
   html+='</tbody></table></div>';c.innerHTML=html;
 }
 function sortBy(ci){if(sC===ci)sA=!sA;else{sC=ci;sA=true}const ks=['venue','item_name','issue_type','sub_location','actual_amount','theo_amount','quantity','variance_dollars','severity','recount'];const k=ks[ci];S.items.sort((a,b)=>{let va=a[k],vb=b[k];if(k==='severity'){va=sevOrd(va);vb=sevOrd(vb)}if(typeof va==='number'&&typeof vb==='number')return sA?va-vb:vb-va;va=String(va||'').toLowerCase();vb=String(vb||'').toLowerCase();return sA?va.localeCompare(vb):vb.localeCompare(va)});sv();renderData()}
@@ -1799,9 +2047,10 @@ function exportCSV(type){
   // Build combined dataset: parsed items + Craftable-only items
   let data=[...S.items];
 
-  // Add Craftable-only variance items that aren't already in S.items
+  // Add Craftable-only variance items that aren't already in S.items.
+  // Keyed on canonical venue + normalized name to avoid the cross-venue leak.
   for(const cv of S.craftData){
-    const alreadyIn=S.items.some(i=>venueMatch(i.venue,cv.venue)&&(
+    const alreadyIn=S.items.some(i=>normalize(i.venue)===normalize(cv.venue)&&(
       normalize(i.item_name)===normalize(cv.item_name)||normalize(i.craftable_match)===normalize(cv.item_name)
     ));
     if(!alreadyIn){
@@ -1809,17 +2058,19 @@ function exportCSV(type){
       const sev=varAbs>=500?'HIGH':varAbs>=200?'MEDIUM':varAbs>=100?'WATCH':'LOW';
       const rc=sev==='HIGH'||sev==='MEDIUM'||(sev==='WATCH'&&varAbs>=S.threshD);
       data.push({
-        venue:cv.venue,item_name:cv.item_name,sku:cv.sku||'',issue_type:'Craftable Variance',
+        venue:cv.venue,item_name:cv.item_name,sku:cv.sku||'',item_id:cv.item_id||stableItemId(cv),issue_type:'Craftable Variance',
         sub_location:'',quantity:cv.variance_qty||0,notes:`Actual: ${cv.actual_amount}, Theo: ${cv.theo_amount}`,
-        variance_dollars:cv.variance_dollars,variance_pct:cv.variance_pct,
-        craftable_match:cv.item_name,craftable_status:'Craftable Only',
+        variance_dollars:cv.variance_dollars,variance_pct:cv.variance_pct,variance_qty:cv.variance_qty||0,
+        actual_amount:cv.actual_amount||0,theo_amount:cv.theo_amount||0,cu_price:cv.cu_price||0,
+        depletions:cv.depletions||0,waste:cv.waste||0,
+        craftable_match:cv.item_name,craftable_status:cv.sku?'Craftable Only':'Craftable Only — No ID',
         weeks_flagged:0,repeat_status:'',still_active:true,severity:sev,recount:rc,
         timestamp:new Date().toLocaleString(),week:weekLabel(),category:cv.category
       });
     }
   }
 
-  if(fv)data=data.filter(i=>venueMatch(i.venue,fv));
+  if(fv){const fvCanon=normalizeVenue(fv);data=data.filter(i=>normalize(i.venue)===normalize(fvCanon))}
   if(type==='recount')data=data.filter(i=>i.recount);
 
   // Sort: CRITICAL first
@@ -1828,32 +2079,51 @@ function exportCSV(type){
   if(!data.length){toast('No recount items found. Try lowering the Min Variance threshold.');return}
   let hdrs,fn;
   if(type==='recount'){
-    hdrs=['Store','Source','Product','Issue Type','Location','Actual Qty','Theo Qty','Qty Variance','Unit Price','Variance ($)','Variance %','Category','Severity','Resolved?','Craftable Status','Notes','Action Required'];
+    hdrs=['Store','Source','Product','SKU','Issue Type','Location','Actual Qty','Theo Qty','Qty Variance','Unit Price','Variance ($)','Variance %','Depletions','Waste','Category','Severity','Resolved?','Craftable Status','Notes','Action Required'];
     fn=i=>{
       const src=i.issue_type==='Craftable Variance'?'CRAFTABLE':'⚡ Initiatecare';
-      return[i.venue,src,i.item_name,i.issue_type||'Variance',i.sub_location||'',
+      return[i.venue,src,i.item_name,i.sku||'',i.issue_type||'Variance',i.sub_location||'',
       i.actual_amount||'',i.theo_amount||'',i.quantity||'',
       i.cu_price?'$'+Number(i.cu_price).toFixed(2):'',
-      i.variance_dollars?'$'+i.variance_dollars.toFixed(2):'',
-      i.variance_pct?i.variance_pct.toFixed(1)+'%':'',
+      i.variance_dollars?'$'+Number(i.variance_dollars).toFixed(2):'',
+      i.variance_pct?Number(i.variance_pct).toFixed(1)+'%':'',
+      i.depletions||0,i.waste||0,
       i.category||'',i.severity,i.resolved?'YES — Resolved':'NO',i.craftable_status||'',i.notes||'',
       i.resolved?'RESOLVED — Variance cleared after recount':'RECOUNT — Verify physical count vs Craftable'];
     };
   }else{
-    hdrs=['Store','Source','Product','SKU','Issue Type','Location','Actual Qty','Theo Qty','Qty Variance','Unit Price','Variance ($)','Variance %','Category','Weeks Flagged','Repeat Status','Severity','Recount?','Resolved?','Craftable Match','Craftable Status','Notes','Week','Timestamp'];
+    hdrs=['Store','Source','Product','SKU','Item ID','Issue Type','Location','Actual Qty','Theo Qty','Qty Variance','Unit Price','Variance ($)','Variance %','Depletions','Waste','Category','Weeks Flagged','Repeat Status','WoW Tag','Prior Variance ($)','Severity','Recount?','Resolved?','Craftable Match','Craftable Status','Notes','Week','Timestamp'];
     fn=i=>{
       const src=i.issue_type==='Craftable Variance'?'CRAFTABLE':'⚡ Initiatecare';
-      return[i.venue,src,i.item_name,i.sku||'',i.issue_type||'',i.sub_location||'',
+      return[i.venue,src,i.item_name,i.sku||'',i.item_id||'',i.issue_type||'',i.sub_location||'',
       i.actual_amount||'',i.theo_amount||'',i.quantity||'',
       i.cu_price?'$'+Number(i.cu_price).toFixed(2):'',
-      i.variance_dollars||'',i.variance_pct?i.variance_pct.toFixed(1)+'%':'',
-      i.category||'',i.weeks_flagged||'',i.repeat_status||'',i.severity,i.recount?'YES':'NO',
+      i.variance_dollars||'',i.variance_pct?Number(i.variance_pct).toFixed(1)+'%':'',
+      i.depletions||0,i.waste||0,
+      i.category||'',i.weeks_flagged||'',i.repeat_status||'',i.wow_tag||'',
+      i.prior_variance_dollars!=null?'$'+Number(i.prior_variance_dollars).toFixed(2):'',
+      i.severity,i.recount?'YES':'NO',
       i.resolved?'YES — Resolved':'NO',
       i.craftable_match||'',i.craftable_status||'',i.notes||'',i.week||'',i.timestamp||''];
     };
   }
   let csv='\uFEFF'+hdrs.map(h=>`"${h}"`).join(',')+'\n';
-  data.forEach(i=>{csv+=fn(i).map(c=>`"${String(c||'').replace(/"/g,'""')}"`).join(',')+'\n'});
+  // Preface with metadata before rows so every downstream reader knows which AVT pull this is from.
+  let meta='';
+  meta+=`"# Report generated","${new Date().toISOString()}"\n`;
+  meta+=`"# AVT generated","${S.avtGeneratedAt||'(not in file — ask Bevager to stamp exports)'}"\n`;
+  meta+=`"# AVT imported at","${S.lastPull||''}"\n`;
+  meta+=`"# Week","${weekLabel()}"\n`;
+  meta+=`"# Venue filter","${fv||'(all)'}"\n`;
+  meta+=`"# Threshold — liquor $","${S.threshLiquor}"\n`;
+  meta+=`"# Threshold — wine $","${S.threshWine}"\n`;
+  meta+=`"# Threshold — qty units","${S.threshQtyUnits}"\n`;
+  meta+=`"# Threshold — variance %","${S.threshPct}%"\n\n`;
+  // Rebuild cleanly with BOM + metadata + header + rows
+  let csvBody='';
+  csvBody+=hdrs.map(h=>`"${h}"`).join(',')+'\n';
+  data.forEach(i=>{csvBody+=fn(i).map(c=>`"${String(c||'').replace(/"/g,'""')}"`).join(',')+'\n'});
+  csv='﻿'+meta+csvBody;
   if(type==='recount'){
     csv+='\n"SUMMARY"\n';
     csv+=`"Total recount items:","${data.length}"\n`;
@@ -1861,6 +2131,8 @@ function exportCSV(type){
     csv+=`"High:","${data.filter(i=>i.severity==='HIGH').length}"\n`;
     csv+=`"Medium:","${data.filter(i=>i.severity==='MEDIUM').length}"\n`;
     csv+=`"Total variance:","$${data.reduce((s,i)=>s+Math.abs(i.variance_dollars||0),0).toFixed(2)}"\n`;
+    csv+=`"Total waste logged:","${data.reduce((s,i)=>s+(i.waste||0),0).toFixed(2)}"\n`;
+    csv+=`"Total depletions:","${data.reduce((s,i)=>s+(i.depletions||0),0).toFixed(2)}"\n`;
     csv+=`"Generated:","${new Date().toLocaleString()}"\n`;
     csv+='\n"BY STORE"\n';
     [...new Set(data.map(i=>i.venue))].forEach(v=>{const vi=data.filter(i=>i.venue===v);csv+=`"${v}","${vi.length} items","$${vi.reduce((s,i)=>s+Math.abs(i.variance_dollars||0),0).toFixed(2)}"\n`});
@@ -2025,7 +2297,121 @@ function clearAll(){if(!confirm('Clear all data?'))return;S.items=[];S.craftData
 function fD(n){if(!n&&n!==0)return'—';const a=Math.abs(n),s='$'+a.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});return n<0?'-'+s:s}
 function esc(s){const d=document.createElement('div');d.textContent=s||'';return d.innerHTML}
 function toast(m){const el=document.createElement('div');el.className='toast';el.textContent=m;document.body.appendChild(el);setTimeout(()=>el.remove(),3000)}
-function updateBadge(){document.getElementById('cBadge').textContent=S.items.filter(i=>i.recount).length}
+function updateBadge(){
+  document.getElementById('cBadge').textContent=S.items.filter(i=>i.recount).length;
+  const iBadge=document.getElementById('iBadge');
+  if(iBadge){
+    const unresolved=getInitiateItems().filter(it=>!getInitiateState(it).resolved).length;
+    iBadge.textContent=unresolved;
+    iBadge.style.display=unresolved>0?'':'none';
+  }
+}
+
+// ═══════════════════════════════════════════════════
+//  INITIATE TAB — live-issue workflow (Step 4)
+// ═══════════════════════════════════════════════════
+// Routing: Slack-originated (⚡ Initiatecare) OR Craftable Status signals a product-level problem
+const INITIATE_STATUSES=new Set(['NOT IN CRAFTABLE','REVIEW — Low Confidence','REVIEW — No Craftable Match','REVIEW — No ID','REVIEW — Missing Actual/Theo']);
+function isInitiateRouted(i){
+  if(!i)return false;
+  const src=i.issue_type!=='Craftable Variance'; // Slack-sourced
+  return src||INITIATE_STATUSES.has(i.craftable_status||'');
+}
+function getInitiateItems(){
+  return S.items.filter(isInitiateRouted).map(i=>{
+    if(!i.item_id)i.item_id=stableItemId(i);
+    return i;
+  });
+}
+function initiateKey(venue,week,itemId){
+  return `${normalizeVenue(venue)}|${week}|${itemId}`;
+}
+function getInitiateState(item){
+  if(!S.initiate)S.initiate={};
+  const wk=item.week||weekLabel();
+  const k=initiateKey(item.venue,wk,item.item_id);
+  if(S.initiate[k])return S.initiate[k];
+  // Carry-over: if prior week has state for this item_id and this venue, surface it with repeating=true
+  if(S.priorWeek&&S.priorWeek.week){
+    const priorK=initiateKey(item.venue,S.priorWeek.week,item.item_id);
+    if(S.initiate[priorK]&&!S.initiate[priorK].resolved){
+      return{resolved:false,note:S.initiate[priorK].note||'',ts:null,initials:S.initiate[priorK].initials||'',repeating:true};
+    }
+  }
+  return{resolved:false,note:'',ts:null,initials:'',repeating:false};
+}
+function saveInitiateState(item,patch){
+  if(!S.initiate)S.initiate={};
+  const wk=item.week||weekLabel();
+  const k=initiateKey(item.venue,wk,item.item_id);
+  const cur=S.initiate[k]||getInitiateState(item);
+  S.initiate[k]={...cur,...patch};
+  sv();
+}
+function onInitiateToggle(itemId,venue,week){
+  const item=S.items.find(i=>i.item_id===itemId&&normalize(i.venue)===normalize(venue)&&(i.week||weekLabel())===week);
+  if(!item)return;
+  const cur=getInitiateState(item);
+  const initials=(prompt('Your initials (optional):',cur.initials||'')||'').toUpperCase().slice(0,4);
+  saveInitiateState(item,{resolved:!cur.resolved,ts:new Date().toISOString(),initials});
+  renderInitiate();updateBadge();
+}
+function onInitiateNote(itemId,venue,week,value){
+  const item=S.items.find(i=>i.item_id===itemId&&normalize(i.venue)===normalize(venue)&&(i.week||weekLabel())===week);
+  if(!item)return;
+  saveInitiateState(item,{note:value});
+}
+function renderInitiate(){
+  const c=document.getElementById('initiateTbl');
+  if(!c)return;
+  const fv=document.getElementById('fIVen')?.value||'';
+  const routed=getInitiateItems().filter(i=>!fv||normalize(i.venue)===normalize(normalizeVenue(fv)));
+  // Enrich with state
+  const enriched=routed.map(i=>{
+    const st=getInitiateState(i);
+    return{item:i,state:st};
+  });
+  const unresolved=enriched.filter(r=>!r.state.resolved);
+  const resolved=enriched.filter(r=>r.state.resolved);
+  // Sort unresolved: repeating first, then by abs variance desc
+  unresolved.sort((a,b)=>{
+    if((b.state.repeating?1:0)!==(a.state.repeating?1:0))return (b.state.repeating?1:0)-(a.state.repeating?1:0);
+    return Math.abs(b.item.variance_dollars||0)-Math.abs(a.item.variance_dollars||0);
+  });
+  const statsBar=document.getElementById('iStatsBar');
+  if(statsBar){
+    statsBar.innerHTML=`<div class="stat"><div class="n" style="color:#dc2626">${unresolved.length}</div><div class="l">To Clear</div></div><div class="stat"><div class="n" style="color:#2d6a4f">${resolved.length}</div><div class="l">Resolved</div></div><div class="stat"><div class="n" style="color:#f59e0b">${unresolved.filter(r=>r.state.repeating).length}</div><div class="l">Repeating</div></div>`;
+  }
+  if(!enriched.length){
+    c.innerHTML='<div class="empty"><span class="ico">&#10003;</span>No live issues routed to Initiate. Import an AVT or parse Slack messages.</div>';
+    return;
+  }
+  const rowFor=(r)=>{
+    const i=r.item,st=r.state;
+    const key=`${i.item_id}::${i.venue}::${i.week||weekLabel()}`;
+    const repeatingTag=st.repeating?'<span style="background:#f59e0b;color:#000;font-size:8px;padding:1px 5px;border-radius:3px;font-weight:700;margin-left:4px">REPEATING</span>':'';
+    const statusTag=`<span style="font-size:9px;color:var(--text-muted)">${esc(i.craftable_status||i.issue_type||'')}</span>`;
+    const vc=i.variance_dollars<0?'vn':i.variance_dollars>0?'vp':'';
+    const noteVal=st.note||'';
+    const tsLine=st.ts?`<div style="font-size:9px;color:var(--text-muted);margin-top:2px">Resolved ${new Date(st.ts).toLocaleString()}${st.initials?' · '+esc(st.initials):''}</div>`:'';
+    return `<tr data-key="${esc(key)}">
+      <td><input type="checkbox" ${st.resolved?'checked':''} onchange="onInitiateToggle('${esc(i.item_id)}','${esc(i.venue)}','${esc(i.week||weekLabel())}')" style="width:18px;height:18px;cursor:pointer"></td>
+      <td>${esc(i.venue)}</td>
+      <td><strong>${esc(i.item_name)}</strong>${repeatingTag}<div style="margin-top:2px">${statusTag}</div>${tsLine}</td>
+      <td class="num ${vc}">${i.variance_dollars?fD(i.variance_dollars):'—'}</td>
+      <td><input type="text" placeholder="Resolution note..." value="${esc(noteVal)}" oninput="onInitiateNote('${esc(i.item_id)}','${esc(i.venue)}','${esc(i.week||weekLabel())}',this.value)" style="width:100%;padding:4px 6px;font-size:11px;background:var(--bg-elevated);border:1px solid var(--border);border-radius:4px;color:var(--text)"></td>
+    </tr>`;
+  };
+  let html='<div class="tbl-wrap"><table><thead><tr><th style="width:40px">✓</th><th>Venue</th><th>Product</th><th>Var $</th><th>Resolution note</th></tr></thead><tbody>';
+  unresolved.forEach(r=>html+=rowFor(r));
+  html+='</tbody></table></div>';
+  if(resolved.length){
+    html+=`<details style="margin-top:14px"><summary style="cursor:pointer;color:var(--text-muted);font-size:11px;padding:6px 0">Resolved this session (${resolved.length}) — click to expand</summary><div class="tbl-wrap" style="margin-top:6px"><table><thead><tr><th style="width:40px">✓</th><th>Venue</th><th>Product</th><th>Var $</th><th>Resolution note</th></tr></thead><tbody>`;
+    resolved.forEach(r=>html+=rowFor(r));
+    html+='</tbody></table></div></details>';
+  }
+  c.innerHTML=html;
+}
 
 // INIT
 renderVS();renderSettings();updateBadge();setupAutoPull();setupImageHandlers();
