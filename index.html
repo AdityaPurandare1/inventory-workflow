@@ -1649,16 +1649,31 @@ const SIM_THRESHOLD=0.42;
 //  R2 MATCHING — NFKD + aliases + size gate + tiered scoring (Issue 5)
 // ═══════════════════════════════════════════════════
 // Built-in typo/spelling map. User-editable entries merge on top via S.customTypoAliases.
+// Built-in typo map. Seeded from real AVT/Slack data across H.Wood venues.
+// Keep names singular-canonical; singular/plural collapse handled via the
+// dedicated SINGULAR_PLURAL map below so we don't conflate "Vineyard" (brand
+// word) with "vineyards" (generic).
 const DEFAULT_TYPO_ALIASES={
-  'imperal':'imperial','imperale':'imperial',
-  'vinyard':'vineyard','vinyards':'vineyards',
-  'chardonay':'chardonnay','chardonais':'chardonnay',
-  'sauvingnon':'sauvignon','savignon':'sauvignon',
-  'caberet':'cabernet','cabernete':'cabernet',
+  // Champagne / still wine typos observed on Delilah LA + Nice Guy AVTs
+  'imperal':'imperial','imperale':'imperial','imperel':'imperial',
+  'vinyard':'vineyard','vinyards':'vineyard',
+  'chardonay':'chardonnay','chardonais':'chardonnay','chardonnary':'chardonnay',
+  'sauvingnon':'sauvignon','savignon':'sauvignon','sauvignion':'sauvignon','sauvingon':'sauvignon','sav':'sauvignon',
+  'caberet':'cabernet','cabernete':'cabernet','cabernat':'cabernet',
   'reisling':'riesling','rieseling':'riesling',
-  'hennesy':'hennessy','hennesey':'hennessy',
+  'merlo':'merlot',
+  // Proper-noun / appellation typos
+  'barbra':'barbara',
+  'rosalio':'rosolio', // Italicus 'Rosolio'
+  // Spirits typos
+  'hennesy':'hennessy','hennesey':'hennessy','henny':'hennessy',
   'casamigo':'casamigos',
-  'henny':'hennessy'
+  'patron':'patron','patrón':'patron'
+};
+// Singular/plural collapse applied AFTER typos, whole-word.
+const SINGULAR_PLURAL={
+  'vineyards':'vineyard',
+  'cellars':'cellar'
 };
 // Brand-level aliases (bidirectional) — normalizes to the first form in the list.
 const DEFAULT_BRAND_ALIASES=[
@@ -1689,10 +1704,13 @@ function normalizeName(s){
   t=t.replace(/['"`]/g,'').replace(/[()[\]]/g,' ');
   // Lowercase
   t=t.toLowerCase();
-  // Apply typo aliases (whole-word)
+  // Apply typo aliases (whole-word), then singular/plural collapse.
   const typos=getAliasMap();
   for(const [bad,good] of Object.entries(typos)){
     t=t.replace(new RegExp('\\b'+escapeRegex(bad)+'\\b','g'),good);
+  }
+  for(const [plural,singular] of Object.entries(SINGULAR_PLURAL)){
+    t=t.replace(new RegExp('\\b'+escapeRegex(plural)+'\\b','g'),singular);
   }
   // Apply brand aliases — rewrite every alias to the canonical (first) form
   for(const group of DEFAULT_BRAND_ALIASES){
@@ -1730,8 +1748,97 @@ function extractSize(s){
   };
 }
 
-// Extract 4-digit vintage year (1900-2099). Used only for display, NOT for matching.
-function extractVintage(s){const m=String(s||'').match(/\b(19|20)\d{2}\b/);return m?m[0]:''}
+// Extract 4-digit vintage year (1900-2099). Used for display AND for soft matching.
+function extractVintage(s){const m=String(s||'').match(/\b(19|20)\d{2}\b/);return m?parseInt(m[0],10):null}
+
+// ═══════════════════════════════════════════════════
+//  R3 Issue 3 — STRUCTURED PRODUCT PARSING
+// ═══════════════════════════════════════════════════
+// Varietal canonical list. Order matters: longer phrases first so "cabernet franc"
+// doesn't get shortened to "cabernet" by the sauvignon match. Anything here becomes
+// a HARD gate in matchProduct — products with different varietals never match.
+const VARIETALS=[
+  'cabernet sauvignon','cabernet franc','pinot noir','pinot grigio','pinot gris','pinot blanc',
+  'sauvignon blanc','chardonnay','chenin blanc','sangiovese','tempranillo','grenache','syrah','shiraz',
+  'merlot','malbec','zinfandel','riesling','gewurztraminer','viognier','gruner veltliner',
+  'nebbiolo','barolo','barbera','barbaresco','brunello','chianti','amarone','bordeaux',
+  'champagne','prosecco','cava','rosé','rose','sparkling',
+  // Spirits categories (loose — these rarely collide at the SKU level)
+  'vodka','gin','rum','tequila','mezcal','whiskey','whisky','scotch','bourbon','rye','cognac','armagnac','brandy',
+  'liqueur','aperitif','amaro','vermouth'
+];
+// Wines/spirits frequently encode the designation (vineyard, cuvée, appellation) inside
+// quotes on the AVT. "Foxen 'Bien Nacido Block 8' Pinot Noir", "Tyler 'Sta. Rita Hills' Chardonnay".
+// We extract the quoted chunk; if only one side has a designation we allow the match but
+// surface a flag.
+function extractDesignation(raw){
+  const s=String(raw||'');
+  // Try straight quotes first, then curly (normalized form usually straight by now)
+  const m=s.match(/['"']([^'"'\n]{2,60})['"']/);
+  if(m)return m[1].trim();
+  return null;
+}
+function extractVarietal(norm){
+  for(const v of VARIETALS){
+    const re=new RegExp('\\b'+v.replace(/\s+/g,'\\s+')+'\\b','i');
+    if(re.test(norm))return v.toLowerCase();
+  }
+  return null;
+}
+function extractBrand(norm,varietal){
+  // Brand = the leading word(s) before the first comma, the first quoted designation,
+  // a 4-digit vintage, a size token, or the varietal itself.
+  let s=norm;
+  if(varietal){s=s.split(new RegExp('\\b'+varietal.replace(/\s+/g,'\\s+')+'\\b','i'))[0]}
+  // Chop at first comma or 4-digit year
+  s=s.split(',')[0];
+  s=s.replace(/\b(19|20)\d{2}\b.*$/,'');
+  // Chop at the first size token
+  s=s.replace(SIZE_RE,'');
+  return s.replace(/\s+/g,' ').trim()||null;
+}
+// Pure parser — takes the raw item_name + optional pre-normalized form.
+// Callers should pass raw; the function handles normalization internally.
+function parseProduct(raw){
+  const rawStr=String(raw||'');
+  const norm=normalizeName(rawStr);
+  const sz=extractSize(rawStr);
+  const vintage=extractVintage(norm);
+  const designation=extractDesignation(rawStr);
+  const varietal=extractVarietal(norm);
+  const brand=extractBrand(norm,varietal);
+  return{
+    raw:rawStr,normalized:norm,
+    brand,designation,varietal,vintage,
+    size_ml:sz.size_ml||null,size_label:sz.size_label||''
+  };
+}
+// Gate check between two parsed products. Returns {ok, reason, flag} where:
+//   ok=true + flag set → proceed but tag (vintage mismatch)
+//   ok=true + no flag → proceed cleanly
+//   ok=false → hard gate, do NOT match
+function gateParsedPair(pa,pb){
+  if(pa.size_ml&&pb.size_ml&&pa.size_ml!==pb.size_ml){
+    return{ok:false,reason:`size_mismatch:${pa.size_ml}ml_vs_${pb.size_ml}ml`};
+  }
+  if(pa.varietal&&pb.varietal&&pa.varietal!==pb.varietal){
+    return{ok:false,reason:`varietal_differs:${pa.varietal}_vs_${pb.varietal}`};
+  }
+  if(pa.designation&&pb.designation){
+    const da=normalizeName(pa.designation),db=normalizeName(pb.designation);
+    // Tolerate minor typos on designations — token_set_ratio >= 85 is "same place".
+    if(da!==db&&tokenSetRatio(da,db)<85){
+      return{ok:false,reason:`designation_differs:${pa.designation}_vs_${pb.designation}`};
+    }
+  }
+  if(pa.vintage&&pb.vintage&&pa.vintage!==pb.vintage){
+    if(Math.abs(pa.vintage-pb.vintage)>1){
+      return{ok:false,reason:`vintage_too_far:${pa.vintage}_vs_${pb.vintage}`};
+    }
+    return{ok:true,flag:`VINTAGE_MISMATCH:${pa.vintage}vs${pb.vintage}`};
+  }
+  return{ok:true};
+}
 
 // RapidFuzz-style token_set_ratio, 0–100. Symmetric-diff trick for robustness on
 // disordered tokens and size tokens.
@@ -1767,45 +1874,51 @@ function tokenSetRatio(a,b){
   return Math.max(r(s1,s2),r(s1,s3),r(s2,s3));
 }
 
-// Main match entrypoint used by crossRef. Returns {match, score (0-100), tier, reason}.
+// Main match entrypoint used by crossRef. Returns {match, score (0-100), tier, reason, flag}.
+// Flag is non-empty when the match passed all hard gates but had a soft mismatch worth
+// surfacing (e.g. VINTAGE_MISMATCH:2022vs2021).
 function matchCraftable(item,craftList){
   const rawName=String(item.item_name||'');
   const itemNorm=normalizeName(rawName);
-  const itemSize=extractSize(rawName);
+  const itemParsed=parseProduct(rawName);
   // Step 1 — learned alias (user-resolved REVIEW from a prior session)
   if(S.learnedAliases&&S.learnedAliases[itemNorm]){
     const learned=S.learnedAliases[itemNorm];
     const hit=craftList.find(cv=>normalizeName(cv.item_name)===learned&&normalize(cv.venue)===normalize(item.venue));
-    if(hit)return{match:hit,score:100,tier:'learned',reason:'Previously confirmed mapping'};
+    if(hit)return{match:hit,score:100,tier:'learned',reason:'Previously confirmed mapping',flag:''};
   }
-  // Step 2 — try IDs (exact SKU) first among same-venue candidates
+  // Step 2 — ID (SKU) match within same venue
   const candidates=craftList.filter(cv=>normalize(cv.venue)===normalize(item.venue));
   if(item.sku){
     const byId=candidates.find(cv=>(cv.sku||'').toString().trim()===(item.sku||'').toString().trim());
-    if(byId)return{match:byId,score:100,tier:'id',reason:'Matched by Bevager ID'};
+    if(byId)return{match:byId,score:100,tier:'id',reason:'Matched by Bevager ID',flag:''};
   }
-  // Step 3 — exact post-normalization equality
+  // Step 3 — exact post-normalization equality (still subject to gates for sanity)
   for(const cv of candidates){
     if(normalizeName(cv.item_name)===itemNorm){
-      return{match:cv,score:100,tier:'exact',reason:'Exact name match after normalization'};
+      const cvParsed=parseProduct(cv.item_name);
+      const gate=gateParsedPair(itemParsed,cvParsed);
+      if(gate.ok){
+        return{match:cv,score:100,tier:'exact',reason:'Exact name match after normalization',flag:gate.flag||''};
+      }
     }
   }
-  // Step 4 — tiered fuzzy with hard size gate
-  let best=null,bestScore=0;
+  // Step 4 — tiered fuzzy. Every candidate must clear the gate (size / varietal /
+  // designation / vintage) BEFORE its name score is considered.
+  let best=null,bestScore=0,bestFlag='';
   for(const cv of candidates){
-    const cvRaw=String(cv.item_name||'');
-    const cvNorm=normalizeName(cvRaw);
-    const cvSize=extractSize(cvRaw);
-    // HARD GATE: if both have sizes and they differ by >5ml, skip
-    if(itemSize.size_ml&&cvSize.size_ml&&Math.abs(itemSize.size_ml-cvSize.size_ml)>5)continue;
-    // Score on size-stripped forms so size tokens don't dominate
-    const score=tokenSetRatio(itemNorm.replace(SIZE_RE,'').trim(),cvNorm.replace(SIZE_RE,'').trim());
-    if(score>bestScore){bestScore=score;best=cv}
+    const cvParsed=parseProduct(cv.item_name);
+    const gate=gateParsedPair(itemParsed,cvParsed);
+    if(!gate.ok)continue; // hard gate — different size/varietal/designation/vintage-far
+    const itemNormNoSize=itemNorm.replace(SIZE_RE,'').trim();
+    const cvNormNoSize=normalizeName(cv.item_name).replace(SIZE_RE,'').trim();
+    const score=tokenSetRatio(itemNormNoSize,cvNormNoSize);
+    if(score>bestScore){bestScore=score;best=cv;bestFlag=gate.flag||''}
   }
-  if(!best)return{match:null,score:0,tier:'none',reason:'No candidate in same venue'};
-  if(bestScore>=95)return{match:best,score:bestScore,tier:'near',reason:`Near match — ${bestScore}% token similarity`};
-  if(bestScore>=85)return{match:best,score:bestScore,tier:'low',reason:`Low confidence — ${bestScore}% token similarity`};
-  return{match:best,score:bestScore,tier:'nomatch',reason:`Best candidate scored only ${bestScore}%`};
+  if(!best)return{match:null,score:0,tier:'none',reason:'No candidate cleared size/varietal/designation gates',flag:''};
+  if(bestScore>=95)return{match:best,score:bestScore,tier:'near',reason:`Near match — ${bestScore}% token similarity`,flag:bestFlag};
+  if(bestScore>=85)return{match:best,score:bestScore,tier:'low',reason:`Low confidence — ${bestScore}% token similarity`,flag:bestFlag};
+  return{match:best,score:bestScore,tier:'nomatch',reason:`Best candidate scored only ${bestScore}%`,flag:bestFlag};
 }
 
 function venueMatch(a,b){
@@ -1881,18 +1994,38 @@ function crossRef(){
 
     if(best){
       item.item_id=best.item_id||stableItemId(best);
-      item.variance_dollars=best.variance_dollars;
-      item.variance_pct=best.variance_pct;
-      item.variance_qty=best.variance_qty||0;
-      item.actual_amount=best.actual_amount||0;
-      item.theo_amount=best.theo_amount||0;
-      item.cu_price=best.cu_price||0;
-      item.depletions=best.depletions||0;
-      item.waste=best.waste||0;
+      // R3 Issue 1 — ONLY inherit variance from confident matches.
+      // Below 95 ("low" @ 85-94 or lower), leave the dollar columns null so
+      // unrelated items can never share a copied value. Surface the reason in
+      // variance_source so engineers can debug without counters seeing fake numbers.
+      const CONFIDENT_TIERS=new Set(['id','exact','learned','near']);
+      if(CONFIDENT_TIERS.has(result.tier)){
+        item.variance_dollars=best.variance_dollars;
+        item.variance_pct=best.variance_pct;
+        item.variance_qty=best.variance_qty||0;
+        item.actual_amount=best.actual_amount||0;
+        item.theo_amount=best.theo_amount||0;
+        item.cu_price=best.cu_price||0;
+        item.depletions=best.depletions||0;
+        item.waste=best.waste||0;
+        item.variance_source='computed';
+      }else{
+        // Low-confidence match: we have a candidate but can't trust the numbers.
+        // Null everything that could spuriously share a value with the candidate.
+        item.variance_dollars=null;
+        item.variance_pct=null;
+        item.variance_qty=null;
+        item.actual_amount=null;
+        item.theo_amount=null;
+        item.cu_price=null;
+        item.depletions=null;
+        item.waste=null;
+        item.variance_source=`null:low_confidence_${result.tier}_${result.score}`;
+      }
       item.craftable_match=best.item_name;
       item.match_score=result.score;
       item.match_tier=result.tier;
-      // R2 Issue 3: suppress "No ID" noise when match is clean.
+      item.match_flag=result.flag||''; // e.g. VINTAGE_MISMATCH:2022vs2021
       if(result.tier==='id'||result.tier==='exact'||result.tier==='learned'){
         item.craftable_status='Craftable';
       }else if(result.tier==='near'){
@@ -1927,12 +2060,29 @@ function crossRef(){
         item.resolved=false;
       }
     }else{
+      // R3 Issue 1 — no candidate found. Wipe any stale variance values from prior runs
+      // so a no-match row can NEVER carry last week's numbers forward disguised as current.
+      item.variance_dollars=null;
+      item.variance_pct=null;
+      item.variance_qty=null;
+      item.actual_amount=null;
+      item.theo_amount=null;
+      item.cu_price=null;
+      item.depletions=null;
+      item.waste=null;
+      item.variance_source='null:no_match';
+      item.match_score=0;
+      item.match_tier='none';
+      item.craftable_match='';
       item.craftable_status=item.sku?'REVIEW — No Match':'REVIEW — No ID';
       item.resolved=false;
+      item.wow_tag='';
+      item.prior_variance_dollars=null;
     }
 
-    // Missing actual/theo override
-    if(Math.abs(item.variance_dollars||0)>0&&(item.actual_amount||0)===0&&(item.theo_amount||0)===0){
+    // Missing actual/theo override — only fires when we actually have a variance_dollars
+    // (null means we couldn't compute, not that it's zero).
+    if(item.variance_dollars!=null&&Math.abs(item.variance_dollars)>0&&(item.actual_amount||0)===0&&(item.theo_amount||0)===0){
       item.craftable_status='REVIEW — Missing Actual/Theo';
     }
 
@@ -1962,7 +2112,7 @@ function crossRef(){
       actual_amount:cv.actual_amount||0,theo_amount:cv.theo_amount||0,cu_price:cv.cu_price||0,
       depletions:cv.depletions||0,waste:cv.waste||0,
       craftable_match:cv.item_name,match_score:100,match_tier:'exact',
-      // R2 Issue 3: plain "Craftable" — the "— No ID" suffix was noise on every row.
+      variance_source:'computed', // R3 Issue 1 — Craftable-origin rows are always trustworthy
       craftable_status:'Craftable',
       weeks_flagged:wowPrior?(wowPrior.weeks_flagged||1)+1:1,
       repeat_status:wowTag.repeat_status,wow_tag:wowTag.tag,
@@ -2355,16 +2505,21 @@ function exportCSV(type){
       i.resolved?'RESOLVED — Variance cleared after recount':'RECOUNT — Verify physical count vs Craftable'];
     };
   }else{
-    hdrs=['Store','Source','Product','SKU','Item ID','Issue Type','Location','Actual Qty','Theo Qty','Qty Variance','Unit Price','Variance ($)','Variance %','Depletions','Waste','Category','Weeks Flagged','Repeat Status','WoW Tag','Prior Variance ($)','Severity','Recount?','Resolved?','Craftable Match','Craftable Status','Notes','Week','Timestamp'];
+    hdrs=['Store','Source','Product','SKU','Item ID','Issue Type','Location','Actual Qty','Theo Qty','Qty Variance','Unit Price','Variance ($)','Variance %','Variance Source','Match Score','Match Tier','Match Flag','Depletions','Waste','Category','Weeks Flagged','Repeat Status','WoW Tag','Prior Variance ($)','Severity','Recount?','Resolved?','Craftable Match','Craftable Status','Notes','Week','Timestamp'];
     fn=i=>{
       const src=i.issue_type==='Craftable Variance'?'CRAFTABLE':'⚡ Initiatecare';
+      // Null-safe renderers — null means "couldn't compute", NOT "zero".
+      const dol=(v)=>v==null?'':'$'+Number(v).toFixed(2);
+      const pct=(v)=>v==null?'':Number(v).toFixed(1)+'%';
+      const num=(v)=>v==null?'':v;
       return[i.venue,src,i.item_name,i.sku||'',i.item_id||'',i.issue_type||'',i.sub_location||'',
-      i.actual_amount||'',i.theo_amount||'',i.quantity||'',
-      i.cu_price?'$'+Number(i.cu_price).toFixed(2):'',
-      i.variance_dollars||'',i.variance_pct?Number(i.variance_pct).toFixed(1)+'%':'',
-      i.depletions||0,i.waste||0,
+      num(i.actual_amount),num(i.theo_amount),num(i.quantity),
+      dol(i.cu_price),
+      dol(i.variance_dollars),pct(i.variance_pct),
+      i.variance_source||'',i.match_score!=null?i.match_score:'',i.match_tier||'',i.match_flag||'',
+      num(i.depletions),num(i.waste),
       i.category||'',i.weeks_flagged||'',i.repeat_status||'',i.wow_tag||'',
-      i.prior_variance_dollars!=null?'$'+Number(i.prior_variance_dollars).toFixed(2):'',
+      dol(i.prior_variance_dollars),
       i.severity,i.recount?'YES':'NO',
       i.resolved?'YES — Resolved':'NO',
       i.craftable_match||'',i.craftable_status||'',i.notes||'',i.week||'',i.timestamp||''];
@@ -2876,6 +3031,10 @@ function buildIssueDetail(i){
     const score=i.match_score!=null?` · ${i.match_score}%`:'';
     parts.push(`<div style="margin-top:${parts.length?'6px':'0'};font-size:10px;color:var(--text-muted)"><div>Slack/Source: <span style="color:var(--text)">${esc(i.item_name)}</span></div><div>Craftable AVT: <span style="color:var(--text)">${esc(i.craftable_match)}</span>${score}</div></div>`);
   }
+  // Match Flag (e.g. VINTAGE_MISMATCH:2022vs2021) — something the counter needs to ask about at the shelf.
+  if(i.match_flag){
+    parts.push(`<div style="margin-top:${parts.length?'6px':'0'};font-size:10px"><span style="background:#f59e0b;color:#000;padding:1px 6px;border-radius:3px;font-weight:700">${esc(i.match_flag)}</span></div>`);
+  }
   const help=catalogHelpFor(i.craftable_status||'');
   if(help){
     parts.push(`<div style="margin-top:${parts.length?'6px':'0'};padding:4px 6px;background:rgba(220,38,38,0.08);border-left:2px solid #dc2626;font-size:10px;line-height:1.35">${esc(help)}</div>`);
@@ -2887,6 +3046,33 @@ function buildIssueDetail(i){
 }
 
 // INIT
+// R3 Issue 2 — startup self-test: loud failure if the known typo pairs don't collapse.
+// Any production-observed pair added here must pass, or the matcher is silently broken.
+(function verifyAliasesAtStartup(){
+  const cases=[
+    ["Moet 'Imperal' Brut","Moet 'Imperial' Brut"],
+    ["Moet Imperal Rose 1.5L","Moet Imperial Rose 1.5L"],
+    ["Vocal Vinyard Lobo Marino","Vocal Vineyards Lobo Marino"],
+    ["Tyler Santa Barbra Pinot Noir","Tyler Santa Barbara Pinot Noir"],
+    ["Stranahans Blue Peak","Stranahan's Blue Peak"],
+    ["Hennesy VS","Hennessy VS"],
+    ["Chardonay 2022","Chardonnay 2022"]
+  ];
+  let pass=0,fail=0;const failures=[];
+  for(const [a,b] of cases){
+    const na=normalizeName(a),nb=normalizeName(b);
+    if(na===nb)pass++;else{fail++;failures.push(`  "${a}" → "${na}"  vs  "${b}" → "${nb}"`)}
+  }
+  const builtin=Object.keys(DEFAULT_TYPO_ALIASES).length;
+  const custom=Object.keys((S&&S.customTypoAliases)||{}).length;
+  const learned=Object.keys((S&&S.learnedAliases)||{}).length;
+  if(fail){
+    console.error(`[inventory] ALIAS SELF-TEST FAILED — ${fail}/${cases.length} pairs do not collapse:\n${failures.join('\n')}`);
+    console.error('[inventory] Fix DEFAULT_TYPO_ALIASES or SINGULAR_PLURAL in index.html before matching can be trusted.');
+  }else{
+    console.log(`[inventory] Alias self-test OK — ${pass}/${cases.length} known pairs collapse. ${builtin} built-in + ${custom} custom + ${learned} learned aliases active.`);
+  }
+})();
 renderVS();renderSettings();updateBadge();setupAutoPull();setupImageHandlers();
 </script>
 </body>
