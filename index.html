@@ -269,6 +269,8 @@ Sarah: 2x Hendrick's Gin unaccounted, walk-in"></textarea>
         <button class="btn-s" onclick="exportCSV('recount')">&#8595; Recount CSV</button>
         <button class="btn-s" onclick="exportCSV('full')">&#8595; Full CSV</button>
         <button class="btn-s" onclick="exportCounterRefresh()" title="Overlays this-week variance on last-week flagged items. Requires two imports.">&#8595; Counter Refresh</button>
+        <button class="btn-s" onclick="document.getElementById('priorWeekFile').click()" title="Load last week's inventory_full_Week_*.csv to populate Prior Variance and WoW Tag columns this week.">&#8593; Prior Week CSV</button>
+        <input type="file" id="priorWeekFile" accept=".csv" style="display:none" onchange="importPriorWeekCSV(event)">
         <button class="btn-s btn-dng" onclick="clearAll()">Clear</button>
       </div>
     </div>
@@ -429,6 +431,21 @@ Sarah: 2x Hendrick's Gin unaccounted, walk-in"></textarea>
     </div>
 
     <div class="sg">
+      <h3>Name Aliases (typo corrections)</h3>
+      <p class="hint" style="margin:0 0 10px">One per line, format <code>typo=canonical</code>. Applied during name normalization before matching. Built-in defaults include <code>imperal=imperial</code>, <code>vinyard=vineyard</code>, <code>chardonay=chardonnay</code> — override here to add more. Hot-reloads on Save (no redeploy).</p>
+      <textarea id="sAliases" rows="6" style="width:100%;font-family:monospace;font-size:11px;padding:6px 8px;background:var(--bg-elevated);border:1px solid var(--border);border-radius:4px;color:var(--text);resize:vertical" placeholder="caymus=caymus
+ketel=ketel one
+imperel=imperial"></textarea>
+      <button class="btn-s" onclick="saveAliases()" style="margin-top:6px">Save Aliases</button>
+      <span class="hint" style="font-size:10px;margin-left:8px" id="aliasCount"></span>
+      <div style="margin-top:12px"><h4 style="font-size:12px;margin:0 0 4px;color:var(--text-muted)">Learned from Initiate tab</h4>
+        <p class="hint" style="margin:0 0 6px;font-size:10px">Mappings saved by counters when resolving REVIEW items. Cleared via Clear Learned.</p>
+        <div id="learnedList" style="font-size:10px;color:var(--text-muted);max-height:140px;overflow:auto;padding:4px 6px;background:var(--bg-elevated);border:1px solid var(--border);border-radius:4px"></div>
+        <button class="btn-s" onclick="clearLearnedAliases()" style="margin-top:6px">Clear Learned</button>
+      </div>
+    </div>
+
+    <div class="sg">
       <h3>Discovered Endpoints</h3>
       <p class="hint" style="margin:0 0 10px">Auto-populated after API discovery. Override if needed.</p>
       <label>Locations Endpoint</label><input type="text" id="sEpLoc" placeholder="/locations">
@@ -481,6 +498,8 @@ function ld(){
       if(!p.threshQtyUnits)p.threshQtyUnits=1;
       if(!p.initiate)p.initiate={};
       if(!p.priorWeek)p.priorWeek=null;
+      if(!p.customTypoAliases)p.customTypoAliases={};
+      if(!p.learnedAliases)p.learnedAliases={};
       // Dedupe venues under canonical spelling
       if(Array.isArray(p.venues)){
         const seen=new Set();p.venues=p.venues.map(v=>normalizeVenue(v)).filter(v=>{if(seen.has(v))return false;seen.add(v);return true});
@@ -491,7 +510,7 @@ function ld(){
       return p;
     }
   }catch(e){}
-  return{apiBase:'https://api.craftable.com/v1',apiKey:'',authMethod:'bearer',githubPat:'',slackToken:'',venues:[...DV],items:[],craftData:[],threshLiquor:50,threshWine:200,threshBottle:1,threshPct:10,threshQtyUnits:1,threshD:100,threshW:3,interval:30,minVar:50,endpoints:{locations:'',variance:'',products:''},lastPull:null,avtGeneratedAt:null,initiate:{},priorWeek:null};
+  return{apiBase:'https://api.craftable.com/v1',apiKey:'',authMethod:'bearer',githubPat:'',slackToken:'',venues:[...DV],items:[],craftData:[],threshLiquor:50,threshWine:200,threshBottle:1,threshPct:10,threshQtyUnits:1,threshD:100,threshW:3,interval:30,minVar:50,endpoints:{locations:'',variance:'',products:''},lastPull:null,avtGeneratedAt:null,initiate:{},priorWeek:null,customTypoAliases:{},learnedAliases:{}};
 }
 function sv(){try{localStorage.setItem(SK,JSON.stringify(S))}catch(e){}}
 
@@ -538,6 +557,11 @@ function renderSettings(){
   document.getElementById('sEpProd').value=S.endpoints.products||'';
   const w=document.getElementById('locTags');w.innerHTML='';
   S.venues.forEach(v=>{const t=document.createElement('span');t.className='ltg';t.innerHTML=`${esc(v)} <span class="x" onclick="removeLoc('${v.replace(/'/g,"\\'")}')">&times;</span>`;w.appendChild(t)});
+  const aEl=document.getElementById('sAliases');
+  if(aEl){aEl.value=Object.entries(S.customTypoAliases||{}).map(([k,v])=>`${k}=${v}`).join('\n')}
+  const ac=document.getElementById('aliasCount');
+  if(ac){const n=Object.keys(S.customTypoAliases||{}).length;ac.textContent=n?`${n} custom alias(es) · ${Object.keys(DEFAULT_TYPO_ALIASES).length} built-in`:`${Object.keys(DEFAULT_TYPO_ALIASES).length} built-in aliases active`}
+  renderLearnedAliases();
 }
 function saveAPI(){S.apiBase=document.getElementById('sApiBase').value.trim().replace(/\/$/,'');S.apiKey=document.getElementById('sApiKey').value.trim();S.authMethod=document.getElementById('sAuthMethod').value;sv();toast('API config saved')}
 function saveGithubPat(){S.githubPat=document.getElementById('sGithubPat').value.trim();sv();toast('GitHub token saved')}
@@ -556,6 +580,28 @@ function saveThr(){
   toast('Thresholds saved · re-scored '+S.items.length+' items');
 }
 function saveEndpoints(){S.endpoints.locations=document.getElementById('sEpLoc').value.trim();S.endpoints.variance=document.getElementById('sEpVar').value.trim();S.endpoints.products=document.getElementById('sEpProd').value.trim();sv();toast('Endpoints saved')}
+function saveAliases(){
+  const raw=document.getElementById('sAliases').value.split('\n').map(l=>l.trim()).filter(l=>l&&!l.startsWith('#'));
+  const map={};
+  for(const line of raw){
+    const m=line.match(/^([^=]+)=(.+)$/);
+    if(m){map[m[1].trim().toLowerCase()]=m[2].trim().toLowerCase()}
+  }
+  S.customTypoAliases=map;sv();
+  crossRef();renderData();renderInitiate();updateBadge();
+  toast(`Saved ${Object.keys(map).length} alias(es). Re-matched ${S.items.length} items.`);
+}
+function clearLearnedAliases(){
+  if(!confirm('Clear all learned aliases? Counters will need to re-map any reviewed items.'))return;
+  S.learnedAliases={};sv();crossRef();renderInitiate();renderData();updateBadge();toast('Learned aliases cleared');
+}
+function renderLearnedAliases(){
+  const el=document.getElementById('learnedList');if(!el)return;
+  const la=S.learnedAliases||{};
+  const keys=Object.keys(la).sort();
+  if(!keys.length){el.innerHTML='<em>None yet.</em>';return}
+  el.innerHTML=keys.map(k=>`<div>${esc(k)} → ${esc(la[k])}</div>`).join('');
+}
 
 // ═══════════════════════════════════════════════════
 //  SLACK INTEGRATION — Pull messages + images
@@ -1507,33 +1553,47 @@ function dimCheck(i){
   const dPct=p>=pctThresh;
   return{flagged:d$||dQty||dPct,d$,dQty,dPct};
 }
+// R2 Issue 4 — redefined severity tiers for meaningful discrimination.
+// HIGH:   |$|≥500 OR |qty|≥10 OR (CHRONIC and |$|≥100)
+// MEDIUM: |$|≥150 OR |qty|≥3 OR |%|≥25
+// LOW:    anything else flagged by the basic threshold
+// WATCH:  below flagging threshold but WoW-worsening (monitor, don't recount)
+// CRITICAL retained for very extreme outliers so long-running CHRONIC + huge-$ still surfaces.
 function scoreSev(i){
-  const w=i.weeks_flagged||1,v=Math.abs(i.variance_dollars||0),a=i.still_active!==false;
+  const v=Math.abs(i.variance_dollars||0);
   const q=Math.abs(i.variance_qty||0);
   const p=Math.abs(i.variance_pct||0);
-  const wine=isWine(i);
-  const varThresh=wine?(S.threshWine||200):(S.threshLiquor||50);
-  const qtyThresh=S.threshQtyUnits||S.threshBottle||1;
-  const pctThresh=S.threshPct||10;
+  const weeks=i.weeks_flagged||1;
+  const chronic=weeks>=4;
+  const wowWorse=i.wow_tag==='Worsened';
+  // Extreme outliers (preserved so a chronic 5k-variance still pops visibly)
+  if(v>=2000&&chronic)return'CRITICAL';
+  // HIGH rules per R2 spec
+  if(v>=500)return'HIGH';
+  if(q>=10)return'HIGH';
+  if(chronic&&v>=100)return'HIGH';
+  // MEDIUM rules per R2 spec
+  if(v>=150)return'MEDIUM';
+  if(q>=3)return'MEDIUM';
+  if(p>=25)return'MEDIUM';
+  // Anything else flagged by the (configurable) basic threshold
   const dc=dimCheck(i);
-
-  // Multi-week severity (for historical tracking across weeks)
-  if(a&&w>=15)return'CRITICAL';if(a&&w>=10)return'CRITICAL';if(a&&w>=5&&v>=varThresh*4)return'CRITICAL';
-  if(!a&&w>=5&&v>=varThresh*10)return'HIGH';if(a&&w>=5)return'HIGH';
-  if(a&&w>=3)return'MEDIUM';
-
-  // Single-week severity — ANY dimension trips MEDIUM; $-only extremes escalate to HIGH
-  if(v>=varThresh*10)return'HIGH';      // 10x dollar threshold = HIGH regardless
-  if(p>=pctThresh*5)return'HIGH';       // 50% variance = HIGH
-  if(dc.flagged)return'MEDIUM';         // Any dimension caught it
-  if(a&&w>=2)return'WATCH';
+  if(dc.flagged)return'LOW';
+  // Below threshold but trending worse WoW — monitor only
+  if(wowWorse)return'WATCH';
   return'LOW';
 }
 function needsRC(i){
   const s=i.severity;
-  if(s==='CRITICAL'||s==='HIGH')return true;
-  if(s==='MEDIUM')return true; // All MEDIUM items need recount (they met at least one threshold)
+  // Recount HIGH + CRITICAL always; MEDIUM as time allows; LOW skipped; WATCH monitor-only.
+  if(s==='CRITICAL'||s==='HIGH'||s==='MEDIUM')return true;
   return false;
+}
+// Repeat status — 3-bucket (R2 Issue 2).
+function computeRepeatStatus(weeks){
+  if(weeks>=4)return'CHRONIC';
+  if(weeks>=2)return'REPEAT';
+  return'NEW';
 }
 function normalize(s){return String(s||'').toLowerCase().replace(/[^a-z0-9]/g,'')}
 function sevOrd(s){return{CRITICAL:0,HIGH:1,MEDIUM:2,WATCH:3,LOW:4}[s]??5}
@@ -1585,6 +1645,169 @@ function similarity(a,b){
 }
 const SIM_THRESHOLD=0.42;
 
+// ═══════════════════════════════════════════════════
+//  R2 MATCHING — NFKD + aliases + size gate + tiered scoring (Issue 5)
+// ═══════════════════════════════════════════════════
+// Built-in typo/spelling map. User-editable entries merge on top via S.customTypoAliases.
+const DEFAULT_TYPO_ALIASES={
+  'imperal':'imperial','imperale':'imperial',
+  'vinyard':'vineyard','vinyards':'vineyards',
+  'chardonay':'chardonnay','chardonais':'chardonnay',
+  'sauvingnon':'sauvignon','savignon':'sauvignon',
+  'caberet':'cabernet','cabernete':'cabernet',
+  'reisling':'riesling','rieseling':'riesling',
+  'hennesy':'hennessy','hennesey':'hennessy',
+  'casamigo':'casamigos',
+  'henny':'hennessy'
+};
+// Brand-level aliases (bidirectional) — normalizes to the first form in the list.
+const DEFAULT_BRAND_ALIASES=[
+  ['moet & chandon','moet chandon','moet','moët','moët & chandon'],
+  ['grey goose','greygoose'],
+  ['don julio','donjulio'],
+  ['veuve clicquot','veuve','clicquot'],
+  ['stranahans','stranahan','stranahan\'s']
+];
+function getAliasMap(){
+  const merged={...DEFAULT_TYPO_ALIASES,...(S.customTypoAliases||{})};
+  return merged;
+}
+function escapeRegex(s){return String(s).replace(/[.*+?^${}()|[\]\\]/g,'\\$&')}
+// Normalize a product name — NFKD, punctuation/whitespace, lowercase, typo + brand aliases.
+function normalizeName(s){
+  if(!s)return '';
+  let t=String(s);
+  // Unicode NFKD — collapse accents, compat forms
+  try{t=t.normalize('NFKD').replace(/[̀-ͯ]/g,'')}catch(e){}
+  // Curly quotes + prime marks → straight
+  t=t.replace(/[‘’‛′´]/g,"'").replace(/[“”‟″]/g,'"');
+  // Em/en dashes + minus → hyphen
+  t=t.replace(/[‒–—―−]/g,'-');
+  // Non-breaking space + zero-width chars
+  t=t.replace(/ /g,' ').replace(/[​-‍⁠﻿]/g,'');
+  // Strip stray apostrophes and parentheses (they make tokens differ spuriously)
+  t=t.replace(/['"`]/g,'').replace(/[()[\]]/g,' ');
+  // Lowercase
+  t=t.toLowerCase();
+  // Apply typo aliases (whole-word)
+  const typos=getAliasMap();
+  for(const [bad,good] of Object.entries(typos)){
+    t=t.replace(new RegExp('\\b'+escapeRegex(bad)+'\\b','g'),good);
+  }
+  // Apply brand aliases — rewrite every alias to the canonical (first) form
+  for(const group of DEFAULT_BRAND_ALIASES){
+    const canon=group[0];
+    for(let k=1;k<group.length;k++){
+      t=t.replace(new RegExp('\\b'+escapeRegex(group[k])+'\\b','g'),canon);
+    }
+  }
+  // Collapse whitespace and misc punctuation
+  t=t.replace(/[,;:!?]/g,' ').replace(/\s+/g,' ').trim();
+  return t;
+}
+
+// Extract size (bottle volume) and return {size_ml, size_label, name_without_size}.
+// Size mismatch is a HARD gate — we never match 750ml to 1L regardless of name score.
+const SIZE_RE=/\b(\d+(?:\.\d+)?)\s*(ml|cl|l|oz|floz|gal|liter|litre|litres)\b/gi;
+function extractSize(s){
+  const src=String(s||'');
+  let m,lastMatch=null;
+  const re=new RegExp(SIZE_RE.source,'gi');
+  while((m=re.exec(src))!==null)lastMatch=m;
+  if(!lastMatch)return{size_ml:0,size_label:'',name_without_size:src};
+  const val=parseFloat(lastMatch[1]);
+  const unit=lastMatch[2].toLowerCase();
+  let ml=0;
+  if(unit==='ml')ml=val;
+  else if(unit==='cl')ml=val*10;
+  else if(unit==='l'||unit==='liter'||unit.startsWith('litre'))ml=val*1000;
+  else if(unit==='oz'||unit==='floz')ml=val*29.5735;
+  else if(unit==='gal')ml=val*3785.41;
+  return{
+    size_ml:Math.round(ml),
+    size_label:`${val}${unit}`,
+    name_without_size:src.replace(re,'').replace(/\s+/g,' ').trim()
+  };
+}
+
+// Extract 4-digit vintage year (1900-2099). Used only for display, NOT for matching.
+function extractVintage(s){const m=String(s||'').match(/\b(19|20)\d{2}\b/);return m?m[0]:''}
+
+// RapidFuzz-style token_set_ratio, 0–100. Symmetric-diff trick for robustness on
+// disordered tokens and size tokens.
+function tokenSetRatio(a,b){
+  const tokA=[...new Set(a.split(/\s+/).filter(w=>w.length>1&&!SIZE_TOKENS.has(w)))].sort();
+  const tokB=[...new Set(b.split(/\s+/).filter(w=>w.length>1&&!SIZE_TOKENS.has(w)))].sort();
+  if(!tokA.length||!tokB.length)return 0;
+  const setA=new Set(tokA),setB=new Set(tokB);
+  const intersect=tokA.filter(t=>setB.has(t)).sort();
+  const diffA=tokA.filter(t=>!setB.has(t)).sort();
+  const diffB=tokB.filter(t=>!setA.has(t)).sort();
+  const s1=intersect.join(' ');
+  const s2=(intersect.concat(diffA)).join(' ');
+  const s3=(intersect.concat(diffB)).join(' ');
+  const r=(x,y)=>{
+    if(!x&&!y)return 100;
+    if(!x||!y)return 0;
+    // Levenshtein-backed ratio
+    const lx=x.length,ly=y.length;
+    if(!lx||!ly)return 0;
+    const dp=new Array(ly+1);for(let j=0;j<=ly;j++)dp[j]=j;
+    for(let i=1;i<=lx;i++){
+      let prev=dp[0];dp[0]=i;
+      for(let j=1;j<=ly;j++){
+        const temp=dp[j];
+        dp[j]=x[i-1]===y[j-1]?prev:1+Math.min(prev,dp[j-1],dp[j]);
+        prev=temp;
+      }
+    }
+    const d=dp[ly];
+    return Math.round(100*(1-d/Math.max(lx,ly)));
+  };
+  return Math.max(r(s1,s2),r(s1,s3),r(s2,s3));
+}
+
+// Main match entrypoint used by crossRef. Returns {match, score (0-100), tier, reason}.
+function matchCraftable(item,craftList){
+  const rawName=String(item.item_name||'');
+  const itemNorm=normalizeName(rawName);
+  const itemSize=extractSize(rawName);
+  // Step 1 — learned alias (user-resolved REVIEW from a prior session)
+  if(S.learnedAliases&&S.learnedAliases[itemNorm]){
+    const learned=S.learnedAliases[itemNorm];
+    const hit=craftList.find(cv=>normalizeName(cv.item_name)===learned&&normalize(cv.venue)===normalize(item.venue));
+    if(hit)return{match:hit,score:100,tier:'learned',reason:'Previously confirmed mapping'};
+  }
+  // Step 2 — try IDs (exact SKU) first among same-venue candidates
+  const candidates=craftList.filter(cv=>normalize(cv.venue)===normalize(item.venue));
+  if(item.sku){
+    const byId=candidates.find(cv=>(cv.sku||'').toString().trim()===(item.sku||'').toString().trim());
+    if(byId)return{match:byId,score:100,tier:'id',reason:'Matched by Bevager ID'};
+  }
+  // Step 3 — exact post-normalization equality
+  for(const cv of candidates){
+    if(normalizeName(cv.item_name)===itemNorm){
+      return{match:cv,score:100,tier:'exact',reason:'Exact name match after normalization'};
+    }
+  }
+  // Step 4 — tiered fuzzy with hard size gate
+  let best=null,bestScore=0;
+  for(const cv of candidates){
+    const cvRaw=String(cv.item_name||'');
+    const cvNorm=normalizeName(cvRaw);
+    const cvSize=extractSize(cvRaw);
+    // HARD GATE: if both have sizes and they differ by >5ml, skip
+    if(itemSize.size_ml&&cvSize.size_ml&&Math.abs(itemSize.size_ml-cvSize.size_ml)>5)continue;
+    // Score on size-stripped forms so size tokens don't dominate
+    const score=tokenSetRatio(itemNorm.replace(SIZE_RE,'').trim(),cvNorm.replace(SIZE_RE,'').trim());
+    if(score>bestScore){bestScore=score;best=cv}
+  }
+  if(!best)return{match:null,score:0,tier:'none',reason:'No candidate in same venue'};
+  if(bestScore>=95)return{match:best,score:bestScore,tier:'near',reason:`Near match — ${bestScore}% token similarity`};
+  if(bestScore>=85)return{match:best,score:bestScore,tier:'low',reason:`Low confidence — ${bestScore}% token similarity`};
+  return{match:best,score:bestScore,tier:'nomatch',reason:`Best candidate scored only ${bestScore}%`};
+}
+
 function venueMatch(a,b){
   if(!a||!b)return true;
   const na=normalize(a),nb=normalize(b);
@@ -1614,21 +1837,37 @@ function venueMatch(a,b){
   return true;
 }
 
+// WoW lookup key — size matters, vintage does NOT (per R2 spec).
+function wowKey(rec){
+  const name=normalizeName(rec.item_name||'');
+  const vintage=extractVintage(name);
+  const nameNoVintage=vintage?name.replace(new RegExp('\\b'+vintage+'\\b','g'),'').replace(/\s+/g,' ').trim():name;
+  const size=extractSize(rec.item_name||'');
+  return `${normalize(rec.venue||'')}|${nameNoVintage}|${size.size_ml||0}`;
+}
+function getPriorWeekByKey(key){
+  if(!S.priorWeek||!Array.isArray(S.priorWeek.items))return null;
+  if(!S.priorWeek._indexByKey){
+    S.priorWeek._indexByKey={};
+    for(const p of S.priorWeek.items)S.priorWeek._indexByKey[wowKey(p)]=p;
+  }
+  return S.priorWeek._indexByKey[key]||null;
+}
+
 function crossRef(){
   if(!S.craftData.length)return;
-
-  // Build lookups: by ID (the stable join key) and by venue|name (fallback bucket).
-  const craftById=new Map();
-  const craftByVenueName=new Map();
+  // Ensure every AVT record has item_id + a match-key cached.
   for(const cv of S.craftData){
     cv.item_id=cv.item_id||stableItemId(cv);
-    if(cv.sku)craftById.set(String(cv.sku).trim(),cv);
-    craftByVenueName.set(`${normalize(cv.venue)}|${normalize(cv.item_name)}`,cv);
   }
+  // Invalidate prior-week index in case user re-imported
+  if(S.priorWeek)S.priorWeek._indexByKey=null;
 
-  // Step 1: Cross-reference existing Slack-parsed items against Craftable
+  let ambiguousNoId=0; // for single top-of-run warning
+
+  // Step 1 — Slack-parsed items → Craftable
   for(const item of S.items){
-    if(item.issue_type==='Craftable Variance')continue; // Skip Craftable-only items
+    if(item.issue_type==='Craftable Variance')continue;
 
     if(!isValidProductName(item.item_name)){
       item.craftable_status='NOT IN CRAFTABLE';
@@ -1637,23 +1876,8 @@ function crossRef(){
       continue;
     }
 
-    let best=null,bs=0,matchVia='';
-
-    // Step 1a — ID join (preferred). Requires same canonical venue.
-    if(item.sku&&craftById.has(String(item.sku).trim())){
-      const byId=craftById.get(String(item.sku).trim());
-      if(venueMatch(item.venue,byId.venue)){best=byId;bs=1.0;matchVia='id'}
-    }
-
-    // Step 1b — Fuzzy fallback against AVT ITEM within the same canonical venue.
-    if(!best){
-      const nn=item.item_name.toLowerCase();
-      for(const cv of S.craftData){
-        if(!venueMatch(item.venue,cv.venue))continue;
-        const sc=similarity(nn,cv.item_name.toLowerCase());
-        if(sc>bs&&sc>=SIM_THRESHOLD){bs=sc;best=cv;matchVia='fuzzy'}
-      }
-    }
+    const result=matchCraftable(item,S.craftData);
+    const best=result.match;
 
     if(best){
       item.item_id=best.item_id||stableItemId(best);
@@ -1666,24 +1890,36 @@ function crossRef(){
       item.depletions=best.depletions||0;
       item.waste=best.waste||0;
       item.craftable_match=best.item_name;
-      if(matchVia==='id')item.craftable_status='YES — In Craftable';
-      else if(bs>=0.9)item.craftable_status='YES — In Craftable';
-      else item.craftable_status='REVIEW — Low Confidence';
+      item.match_score=result.score;
+      item.match_tier=result.tier;
+      // R2 Issue 3: suppress "No ID" noise when match is clean.
+      if(result.tier==='id'||result.tier==='exact'||result.tier==='learned'){
+        item.craftable_status='Craftable';
+      }else if(result.tier==='near'){
+        item.craftable_status=`REVIEW — Near Match (${result.score}%)`;
+        if(!best.sku)ambiguousNoId++;
+      }else if(result.tier==='low'){
+        item.craftable_status=`REVIEW — Low Confidence (${result.score}%)`;
+      }else{
+        item.craftable_status='REVIEW — No Match';
+      }
       item.category=best.category||item.category;
-      // WoW reconciliation tag (Improvement F)
-      const wowPrior=getPriorWeekRecord(item.item_id);
+
+      // WoW (match key uses name-no-vintage + size_ml per R2 spec)
+      const wk=wowKey(best);
+      const wowPrior=getPriorWeekByKey(wk);
       const wowTag=computeWowTag(best,wowPrior);
       item.wow_tag=wowTag.tag;
-      item.prior_variance_dollars=wowPrior?wowPrior.variance_dollars:null;
-      if(wowPrior&&wowPrior.weeks_flagged)item.weeks_flagged=(wowPrior.weeks_flagged||1)+1;
+      item.prior_variance_dollars=wowPrior?(wowPrior.variance_dollars||0):null;
+      item.weeks_flagged=wowPrior?((wowPrior.weeks_flagged||1)+1):(item.weeks_flagged||1);
+      item.repeat_status=wowTag.repeat_status;
 
-      // RESOLUTION CHECK: Slack flagged, Craftable now shows low variance → RESOLVED
+      // Resolution check
       const wine=isWine(item);
       const varThresh=wine?(S.threshWine||200):(S.threshLiquor||50);
       const absVar=Math.abs(best.variance_dollars||0);
       const absQty=Math.abs(best.variance_qty||0);
       const pct=Math.abs(best.variance_pct||0);
-
       if(absVar<varThresh&&absQty<(S.threshQtyUnits||1)&&pct<(S.threshPct||10)){
         item.resolved=true;
         item.resolved_status='RESOLVED — Variance cleared after recount';
@@ -1691,12 +1927,11 @@ function crossRef(){
         item.resolved=false;
       }
     }else{
-      // No match — make the gap visible instead of silently writing it to the report.
-      item.craftable_status=item.sku?'REVIEW — No Craftable Match':'REVIEW — No ID';
+      item.craftable_status=item.sku?'REVIEW — No Match':'REVIEW — No ID';
       item.resolved=false;
     }
 
-    // Bug 3: if variance $ present but actual/theo both zero, flag for manual review
+    // Missing actual/theo override
     if(Math.abs(item.variance_dollars||0)>0&&(item.actual_amount||0)===0&&(item.theo_amount||0)===0){
       item.craftable_status='REVIEW — Missing Actual/Theo';
     }
@@ -1704,27 +1939,51 @@ function crossRef(){
     item.severity=scoreSev(item);item.recount=item.resolved?false:needsRC(item);
   }
 
-  // Step 2: Add Craftable-only items (not already matched) into S.items.
-  // Key on venue|name to avoid cross-venue leak (prior crossRef bug).
+  // Step 2 — Add Craftable-only items. Key on canonical venue + normalized name.
   const matchedByKey=new Set();
   S.items.forEach(i=>{
-    if(i.craftable_match)matchedByKey.add(`${normalize(i.venue)}|${normalize(i.craftable_match)}`);
+    if(i.craftable_match)matchedByKey.add(`${normalize(i.venue)}|${normalizeName(i.craftable_match)}`);
   });
   const now=new Date().toLocaleString(),wk=weekLabel();
+  let missingIdCount=0;
   for(const cv of S.craftData){
-    const key=`${normalize(cv.venue)}|${normalize(cv.item_name)}`;
+    const key=`${normalize(cv.venue)}|${normalizeName(cv.item_name)}`;
     if(matchedByKey.has(key))continue;
     const alreadyIn=S.items.some(i=>i.issue_type==='Craftable Variance'&&normalize(i.item_name)===normalize(cv.item_name)&&normalize(i.venue)===normalize(cv.venue));
     if(alreadyIn)continue;
-    const wowPrior=getPriorWeekRecord(cv.item_id);
+    if(!cv.sku)missingIdCount++;
+    const wk2=wowKey(cv);
+    const wowPrior=getPriorWeekByKey(wk2);
     const wowTag=computeWowTag(cv,wowPrior);
-    const obj={venue:cv.venue,item_name:cv.item_name,sku:cv.sku||'',item_id:cv.item_id||stableItemId(cv),issue_type:'Craftable Variance',sub_location:'',quantity:cv.variance_qty||0,notes:'',variance_dollars:cv.variance_dollars,variance_pct:cv.variance_pct,variance_qty:cv.variance_qty||0,actual_amount:cv.actual_amount||0,theo_amount:cv.theo_amount||0,cu_price:cv.cu_price||0,depletions:cv.depletions||0,waste:cv.waste||0,craftable_match:cv.item_name,craftable_status:cv.sku?'Craftable Only':'Craftable Only — No ID',weeks_flagged:wowPrior?(wowPrior.weeks_flagged||1)+1:1,repeat_status:wowTag.repeat_status,wow_tag:wowTag.tag,prior_variance_dollars:wowPrior?wowPrior.variance_dollars:null,still_active:true,severity:'',recount:false,resolved:false,timestamp:now,week:wk,category:cv.category||''};
-    // Also flag Craftable-only items missing actual/theo
+    const obj={
+      venue:cv.venue,item_name:cv.item_name,sku:cv.sku||'',item_id:cv.item_id||stableItemId(cv),
+      issue_type:'Craftable Variance',sub_location:'',quantity:cv.variance_qty||0,notes:'',
+      variance_dollars:cv.variance_dollars,variance_pct:cv.variance_pct,variance_qty:cv.variance_qty||0,
+      actual_amount:cv.actual_amount||0,theo_amount:cv.theo_amount||0,cu_price:cv.cu_price||0,
+      depletions:cv.depletions||0,waste:cv.waste||0,
+      craftable_match:cv.item_name,match_score:100,match_tier:'exact',
+      // R2 Issue 3: plain "Craftable" — the "— No ID" suffix was noise on every row.
+      craftable_status:'Craftable',
+      weeks_flagged:wowPrior?(wowPrior.weeks_flagged||1)+1:1,
+      repeat_status:wowTag.repeat_status,wow_tag:wowTag.tag,
+      prior_variance_dollars:wowPrior?(wowPrior.variance_dollars||0):null,
+      still_active:true,severity:'',recount:false,resolved:false,
+      timestamp:now,week:wk,category:cv.category||'',
+      vintage:extractVintage(cv.item_name||'')
+    };
     if(Math.abs(obj.variance_dollars||0)>0&&(obj.actual_amount||0)===0&&(obj.theo_amount||0)===0){
       obj.craftable_status='REVIEW — Missing Actual/Theo';
     }
     obj.severity=scoreSev(obj);obj.recount=needsRC(obj);
     S.items.push(obj);
+  }
+
+  // R2 Issue 3 — one consolidated warning, not per-row noise.
+  if(missingIdCount>0){
+    console.warn(`[inventory] ${missingIdCount} AVT rows matched by normalized name; Bevager ID column empty. Consider opening a Bevager ticket to populate ID on AVT exports.`);
+  }
+  if(ambiguousNoId>0){
+    console.warn(`[inventory] ${ambiguousNoId} near-matches (95-99%) would benefit from stable IDs to disambiguate.`);
   }
 
   S.items.sort((a,b)=>sevOrd(a.severity)-sevOrd(b.severity));sv();updateBadge();
@@ -1755,7 +2014,7 @@ function getPriorWeekRecord(itemId){
   return S.priorWeek.items.find(p=>p.item_id===itemId)||null;
 }
 function computeWowTag(cv,prior){
-  // Returns {tag, repeat_status}
+  // R2 Issue 2 — ±20% delta for Improved/Worsened; else Persisting.
   const wine=isWine(cv);
   const varThresh=wine?(S.threshWine||200):(S.threshLiquor||50);
   const absVar=Math.abs(cv.variance_dollars||0);
@@ -1768,11 +2027,13 @@ function computeWowTag(cv,prior){
   const priorAbs=Math.abs(prior.variance_dollars||0);
   const priorFlagged=priorAbs>=varThresh||Math.abs(prior.variance_pct||0)>=(S.threshPct||10)||Math.abs(prior.variance_qty||0)>=(S.threshQtyUnits||1);
   const weeks=(prior.weeks_flagged||1)+1;
-  const repeat_status=weeks>=15?'CHRONIC (15+)':weeks>=10?'PERSISTENT (10-14)':weeks>=5?'RECURRING (5-9)':weeks>=2?'REPEATING (2-4)':'NEW';
+  const repeat_status=computeRepeatStatus(weeks);
   if(priorFlagged&&!flaggedNow)return{tag:'Resolved',repeat_status};
   if(!priorFlagged&&flaggedNow)return{tag:'New',repeat_status:'NEW'};
-  if(absVar>priorAbs*1.1)return{tag:'Worsened',repeat_status};
-  if(absVar<priorAbs*0.9)return{tag:'Improved',repeat_status};
+  if(priorAbs===0)return{tag:'Persisting',repeat_status};
+  const delta=(absVar-priorAbs)/priorAbs;
+  if(delta>0.2)return{tag:'Worsened',repeat_status};
+  if(delta<-0.2)return{tag:'Improved',repeat_status};
   return{tag:'Persisting',repeat_status};
 }
 
@@ -1999,8 +2260,10 @@ function renderXRef(){
 // ═══════════════════════════════════════════════════
 let sC=-1,sA=true;
 // Items with these statuses are "live issues" — surface to the top of the main tab (Improvement G).
-const LIVE_ISSUE_STATUSES=new Set(['NOT IN CRAFTABLE','REVIEW — Low Confidence','REVIEW — No Craftable Match','REVIEW — No ID','REVIEW — Missing Actual/Theo','Craftable Only — No ID']);
-function isLiveIssue(i){return LIVE_ISSUE_STATUSES.has(i.craftable_status||'')}
+function isLiveIssue(i){
+  const s=i.craftable_status||'';
+  return s==='NOT IN CRAFTABLE'||s.startsWith('REVIEW')||s==='Craftable Only — No ID';
+}
 
 function renderData(){
   const fv=document.getElementById('fVen').value,fs=document.getElementById('fSev').value,fr=document.getElementById('fRc').value;
@@ -2122,7 +2385,8 @@ function exportCSV(type){
   // Rebuild cleanly with BOM + metadata + header + rows
   let csvBody='';
   csvBody+=hdrs.map(h=>`"${h}"`).join(',')+'\n';
-  data.forEach(i=>{csvBody+=fn(i).map(c=>`"${String(c||'').replace(/"/g,'""')}"`).join(',')+'\n'});
+  // Preserve numeric 0 (waste/depletions) — coerce only null/undefined to empty.
+  data.forEach(i=>{csvBody+=fn(i).map(c=>`"${(c==null?'':String(c)).replace(/"/g,'""')}"`).join(',')+'\n'});
   csv='﻿'+meta+csvBody;
   if(type==='recount'){
     csv+='\n"SUMMARY"\n';
@@ -2140,6 +2404,129 @@ function exportCSV(type){
   const blob=new Blob([csv],{type:'text/csv;charset=utf-8'});const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=type==='recount'?`RECOUNT_${weekLabel().replace(/\s/g,'_')}.csv`:`inventory_full_${weekLabel().replace(/\s/g,'_')}.csv`;a.click();URL.revokeObjectURL(url);
   toast(type==='recount'?'Recount CSV downloaded':'Full CSV downloaded');
 }
+
+// ═══════════════════════════════════════════════════
+//  COUNTER-SHEET REFRESH — overlay this-week variance on last-week flagged items (Bug 4)
+// ═══════════════════════════════════════════════════
+function exportCounterRefresh(){
+  if(!S.priorWeek||!Array.isArray(S.priorWeek.items)||!S.priorWeek.items.length){
+    toast('No prior-week snapshot yet. Import a prior-week CSV first or re-import next week.');return;
+  }
+  const fv=document.getElementById('fVen').value;
+  const currentByKey=new Map();
+  S.craftData.forEach(cv=>currentByKey.set(wowKey(cv),cv));
+  const rows=S.priorWeek.items
+    .filter(p=>!fv||normalize(p.venue)===normalize(normalizeVenue(fv)))
+    .map(p=>{
+      const cur=currentByKey.get(wowKey(p));
+      const priorAbs=Math.abs(p.variance_dollars||0);
+      const curVar=cur?(cur.variance_dollars||0):null;
+      const curAbs=curVar==null?null:Math.abs(curVar);
+      const delta=curAbs==null?null:(curAbs-priorAbs);
+      const status=cur==null?'DROPPED (no longer in AVT)':curAbs<priorAbs*0.5?'IMPROVED':curAbs>priorAbs*1.1?'WORSENED':'PERSISTING';
+      return{p,cur,curVar,curAbs,delta,status};
+    });
+  if(!rows.length){toast('No rows for that filter.');return}
+  const hdrs=['Store','Product','SKU','Item ID','Category','Prior Variance ($)','Prior Variance %','Prior Actual','Prior Theo','Updated Variance ($)','Updated Variance %','Updated Actual','Updated Theo','Updated Waste','Updated Depletions','Delta |Variance $|','Status'];
+  let csv='﻿';
+  csv+=`"# Counter-sheet refresh","${new Date().toISOString()}"\n`;
+  csv+=`"# Prior week","${S.priorWeek.week||''}"\n`;
+  csv+=`"# Prior AVT generated","${S.priorWeek.avtGeneratedAt||'(unknown)'}"\n`;
+  csv+=`"# Current AVT generated","${S.avtGeneratedAt||'(unknown)'}"\n\n`;
+  csv+=hdrs.map(h=>`"${h}"`).join(',')+'\n';
+  rows.forEach(r=>{
+    const line=[r.p.venue,r.p.item_name,r.p.sku,r.p.item_id||'',r.p.category||'',
+      r.p.variance_dollars?'$'+Number(r.p.variance_dollars).toFixed(2):'',
+      r.p.variance_pct?Number(r.p.variance_pct).toFixed(1)+'%':'',
+      r.p.actual_amount||0,r.p.theo_amount||0,
+      r.curVar==null?'—':'$'+r.curVar.toFixed(2),
+      r.cur&&r.cur.variance_pct!=null?Number(r.cur.variance_pct).toFixed(1)+'%':'—',
+      r.cur?r.cur.actual_amount:'—',r.cur?r.cur.theo_amount:'—',
+      r.cur?(r.cur.waste==null?'—':r.cur.waste):'—',
+      r.cur?(r.cur.depletions==null?'—':r.cur.depletions):'—',
+      r.delta==null?'—':'$'+r.delta.toFixed(2),r.status];
+    csv+=line.map(c=>`"${(c==null?'':String(c)).replace(/"/g,'""')}"`).join(',')+'\n';
+  });
+  const blob=new Blob([csv],{type:'text/csv;charset=utf-8'});const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=`counter_refresh_${weekLabel().replace(/\s/g,'_')}.csv`;a.click();URL.revokeObjectURL(url);
+  toast('Counter-sheet refresh CSV downloaded');
+}
+
+// ═══════════════════════════════════════════════════
+//  PRIOR-WEEK CSV IMPORT (R2 Issue 2) — reload last week's output as this week's snapshot
+// ═══════════════════════════════════════════════════
+function importPriorWeekCSV(ev){
+  const file=ev.target.files[0];if(!file)return;
+  ev.target.value='';
+  const reader=new FileReader();
+  reader.onload=(e)=>{
+    try{
+      const text=e.target.result;
+      // Parse, skipping metadata lines that start with "# ..."
+      const lines=text.split(/\r?\n/).map(l=>l.trim()).filter(l=>l);
+      // Find header row (first row starting with "Store" or containing "Product")
+      let headerIdx=-1;
+      let week='',avtGen='';
+      for(let i=0;i<lines.length;i++){
+        const low=lines[i].toLowerCase();
+        if(low.includes('"# week"')){const m=lines[i].match(/","(.*)"/);if(m)week=m[1]}
+        if(low.includes('"# avt generated"')){const m=lines[i].match(/","(.*)"/);if(m)avtGen=m[1]}
+        if(/^"?store"?/i.test(lines[i])&&lines[i].toLowerCase().includes('product')){headerIdx=i;break}
+      }
+      if(headerIdx<0){toast('Could not find header row in prior-week CSV — expected "Store,...,Product,...".');return}
+      const hdrs=csvLine(lines[headerIdx]).map(h=>h.toLowerCase().trim());
+      const col=(keys)=>hdrs.findIndex(h=>keys.some(k=>h.includes(k)));
+      const ci={
+        store:col(['store']),
+        product:col(['product']),
+        sku:col(['sku']),
+        item_id:col(['item id']),
+        vDol:col(['variance ($)','variance $','variance dollars']),
+        vPct:col(['variance %','variance pct']),
+        vQty:col(['qty variance','variance qty']),
+        actual:col(['actual qty','actual amount','actual']),
+        theo:col(['theo qty','theo amount','theo']),
+        category:col(['category']),
+        weeks:col(['weeks flagged']),
+        depl:col(['depletion']),
+        waste:col(['waste']),
+      };
+      if(ci.store<0||ci.product<0){toast('Header mismatch. Need Store and Product columns.');return}
+      const num=(s)=>{const m=String(s||'').replace(/[$,%]/g,'');const n=parseFloat(m);return isNaN(n)?0:n};
+      const items=[];
+      for(let i=headerIdx+1;i<lines.length;i++){
+        if(/^"?summary"?/i.test(lines[i])||/^"?by\s+store"?/i.test(lines[i]))break;
+        const c=csvLine(lines[i]);
+        if(!c[ci.product])continue;
+        const venue=normalizeVenue(String(c[ci.store]||'').trim());
+        const rec={
+          venue,
+          item_name:String(c[ci.product]||'').trim(),
+          sku:ci.sku>=0?String(c[ci.sku]||'').trim():'',
+          item_id:ci.item_id>=0?String(c[ci.item_id]||'').trim():'',
+          variance_dollars:ci.vDol>=0?num(c[ci.vDol]):0,
+          variance_pct:ci.vPct>=0?num(c[ci.vPct]):0,
+          variance_qty:ci.vQty>=0?num(c[ci.vQty]):0,
+          actual_amount:ci.actual>=0?num(c[ci.actual]):0,
+          theo_amount:ci.theo>=0?num(c[ci.theo]):0,
+          category:ci.category>=0?String(c[ci.category]||'').trim():'',
+          depletions:ci.depl>=0?num(c[ci.depl]):0,
+          waste:ci.waste>=0?num(c[ci.waste]):0,
+          weeks_flagged:ci.weeks>=0?Math.max(1,num(c[ci.weeks])):1,
+        };
+        if(!rec.item_id)rec.item_id=stableItemId(rec);
+        items.push(rec);
+      }
+      if(!items.length){toast('No rows parsed from prior-week CSV.');return}
+      S.priorWeek={week:week||'Prior',capturedAt:new Date().toISOString(),avtGeneratedAt:avtGen||null,items,_indexByKey:null};
+      sv();
+      // Re-run crossRef so WoW tags populate on current items
+      crossRef();renderData();renderInitiate();updateBadge();
+      toast(`Loaded ${items.length} prior-week rows${week?' ('+week+')':''}. WoW tags recomputed.`);
+    }catch(err){toast('Import error: '+err.message)}
+  };
+  reader.readAsText(file);
+}
+
 // ═══════════════════════════════════════════════════
 //  MASTER INVENTORY LIST
 // ═══════════════════════════════════════════════════
@@ -2311,11 +2698,11 @@ function updateBadge(){
 //  INITIATE TAB — live-issue workflow (Step 4)
 // ═══════════════════════════════════════════════════
 // Routing: Slack-originated (⚡ Initiatecare) OR Craftable Status signals a product-level problem
-const INITIATE_STATUSES=new Set(['NOT IN CRAFTABLE','REVIEW — Low Confidence','REVIEW — No Craftable Match','REVIEW — No ID','REVIEW — Missing Actual/Theo']);
 function isInitiateRouted(i){
   if(!i)return false;
   const src=i.issue_type!=='Craftable Variance'; // Slack-sourced
-  return src||INITIATE_STATUSES.has(i.craftable_status||'');
+  const s=i.craftable_status||'';
+  return src||s==='NOT IN CRAFTABLE'||s.startsWith('REVIEW');
 }
 function getInitiateItems(){
   return S.items.filter(isInitiateRouted).map(i=>{
@@ -2361,6 +2748,36 @@ function onInitiateNote(itemId,venue,week,value){
   if(!item)return;
   saveInitiateState(item,{note:value});
 }
+// Alias learning loop (R2 Issue 5e) — when the counter picks the right product
+// from the datalist, write it to S.learnedAliases so next week it auto-resolves.
+function onAliasMap(itemId,venue,craftableName){
+  if(!craftableName||craftableName==='-'){return}
+  const item=S.items.find(i=>i.item_id===itemId&&normalize(i.venue)===normalize(venue));
+  if(!item)return;
+  const slackKey=normalizeName(item.item_name);
+  const craftKey=normalizeName(craftableName);
+  if(!slackKey||!craftKey){toast('Could not normalize names for mapping');return}
+  if(!S.learnedAliases)S.learnedAliases={};
+  S.learnedAliases[slackKey]=craftKey;
+  sv();
+  // Re-run crossRef so the newly mapped item resolves immediately
+  crossRef();
+  renderInitiate();renderData();updateBadge();
+  toast(`Mapping saved: "${item.item_name}" → "${craftableName}"`);
+}
+// Produce the <option> list of AVT products at a venue for the datalist picker.
+function craftOptionsForVenue(venue){
+  const canon=normalize(normalizeVenue(venue));
+  const seen=new Set();
+  const opts=[];
+  for(const cv of S.craftData){
+    if(normalize(cv.venue)!==canon)continue;
+    if(seen.has(cv.item_name))continue;
+    seen.add(cv.item_name);
+    opts.push(cv.item_name);
+  }
+  return opts.sort();
+}
 function renderInitiate(){
   const c=document.getElementById('initiateTbl');
   if(!c)return;
@@ -2386,6 +2803,13 @@ function renderInitiate(){
     c.innerHTML='<div class="empty"><span class="ico">&#10003;</span>No live issues routed to Initiate. Import an AVT or parse Slack messages.</div>';
     return;
   }
+  // Build a datalist per venue so the Map-to picker has autocomplete of AVT products.
+  const venuesInView=[...new Set(enriched.map(r=>r.item.venue))];
+  const datalists=venuesInView.map(v=>{
+    const opts=craftOptionsForVenue(v).map(n=>`<option value="${esc(n)}"></option>`).join('');
+    return `<datalist id="dl-craft-${esc(normalize(v))}">${opts}</datalist>`;
+  }).join('');
+
   const rowFor=(r)=>{
     const i=r.item,st=r.state;
     const key=`${i.item_id}::${i.venue}::${i.week||weekLabel()}`;
@@ -2396,19 +2820,21 @@ function renderInitiate(){
     const vc=i.variance_dollars<0?'vn':i.variance_dollars>0?'vp':'';
     const noteVal=st.note||'';
     const tsLine=st.ts?`<div style="font-size:9px;color:var(--text-muted);margin-top:4px">Resolved ${new Date(st.ts).toLocaleString()}${st.initials?' · '+esc(st.initials):''}</div>`:'';
-    // Build the Issue cell — Slack-derived detail first, catalog explanation as fallback
     const issueHtml=buildIssueDetail(i);
+    // Alias learning loop: on REVIEW rows, let the counter pick the canonical AVT product.
+    const isReview=(i.craftable_status||'').startsWith('REVIEW')||(i.craftable_status||'')==='NOT IN CRAFTABLE';
+    const mapPicker=isReview?`<div style="margin-top:6px;display:flex;gap:4px;align-items:center"><input list="dl-craft-${esc(normalize(i.venue))}" placeholder="Map to AVT product…" style="flex:1;padding:3px 6px;font-size:10px;background:var(--bg-elevated);border:1px solid var(--border);border-radius:3px;color:var(--text)" onchange="onAliasMap('${esc(i.item_id)}','${esc(i.venue)}',this.value)"><span style="font-size:9px;color:var(--text-muted)" title="Saving a mapping here teaches the matcher — next week this item auto-resolves.">ⓘ</span></div>`:'';
     return `<tr data-key="${esc(key)}">
       <td><input type="checkbox" ${st.resolved?'checked':''} onchange="onInitiateToggle('${esc(i.item_id)}','${esc(i.venue)}','${esc(i.week||weekLabel())}')" style="width:18px;height:18px;cursor:pointer"></td>
       <td style="font-size:11px">${esc(i.venue)}</td>
-      <td>${sourceTag}<strong>${esc(i.item_name)}</strong>${repeatingTag}<div style="margin-top:3px">${statusTag}</div>${tsLine}</td>
+      <td>${sourceTag}<strong>${esc(i.item_name)}</strong>${repeatingTag}<div style="margin-top:3px">${statusTag}</div>${tsLine}${mapPicker}</td>
       <td style="font-size:11px;max-width:340px">${issueHtml}</td>
       <td class="num ${vc}">${i.variance_dollars?fD(i.variance_dollars):'—'}</td>
       <td><input type="text" placeholder="Resolution note..." value="${esc(noteVal)}" oninput="onInitiateNote('${esc(i.item_id)}','${esc(i.venue)}','${esc(i.week||weekLabel())}',this.value)" style="width:100%;padding:4px 6px;font-size:11px;background:var(--bg-elevated);border:1px solid var(--border);border-radius:4px;color:var(--text)"></td>
     </tr>`;
   };
   const tblHdr='<div class="tbl-wrap"><table><thead><tr><th style="width:40px">✓</th><th>Venue</th><th>Product</th><th>Issue</th><th>Var $</th><th>Resolution note</th></tr></thead><tbody>';
-  let html=tblHdr;
+  let html=datalists+tblHdr;
   unresolved.forEach(r=>html+=rowFor(r));
   html+='</tbody></table></div>';
   if(resolved.length){
@@ -2422,14 +2848,18 @@ function renderInitiate(){
 // Human-readable explanation of WHY an item landed on Initiate.
 // For Slack-sourced items: shows the AI-parsed issue_type, notes, location, quantity.
 // For catalog-level REVIEW statuses: shows what the counter needs to verify.
-const CATALOG_ISSUE_HELP={
-  'REVIEW — No Craftable Match':'No matching product in Craftable. Verify the product exists in the catalog — add it, or correct the name spelling at source.',
-  'REVIEW — No ID':'Product is flagged but has no Bevager ID. Ask a platform admin to assign the ID so future joins are reliable.',
-  'REVIEW — Low Confidence':'Weak fuzzy match to a Craftable product. Confirm this is the right item before treating the variance as valid.',
-  'REVIEW — Missing Actual/Theo':'Variance logged but actual and theoretical counts are both blank. Manual recount needed to establish the baseline.',
-  'NOT IN CRAFTABLE':'Product not in our Craftable catalog at all. Counter needs to confirm it physically exists at the venue.',
-  'Craftable Only — No ID':'Craftable returned a variance for this item but no stable ID. Ask admin to populate it.'
-};
+// Human-readable explanations keyed on the new R2 status taxonomy.
+function catalogHelpFor(status){
+  if(!status)return null;
+  if(status==='REVIEW — No Match')return'No matching product in Craftable. Verify the product exists in the catalog — add it, or correct the name spelling at source.';
+  if(status==='REVIEW — No ID')return'Product matches by name but has no Bevager ID. Ask a platform admin to assign one so future joins are reliable.';
+  if(status.startsWith('REVIEW — Near Match'))return'High confidence (95–99%) match — confirm both names refer to the same product before accepting.';
+  if(status.startsWith('REVIEW — Low Confidence'))return'Weak fuzzy match (85–94%) — confirm this is the right item before treating the variance as valid.';
+  if(status==='REVIEW — Missing Actual/Theo')return'Variance logged but actual and theoretical counts are both blank. Manual recount needed.';
+  if(status==='NOT IN CRAFTABLE')return'Product not in our Craftable catalog at all. Counter needs to confirm it physically exists at the venue.';
+  if(status==='Craftable Only — No ID')return'Craftable returned a variance for this item but no stable ID. Ask admin to populate it.';
+  return null;
+}
 function buildIssueDetail(i){
   const parts=[];
   const isSlack=i.issue_type&&i.issue_type!=='Craftable Variance';
@@ -2441,8 +2871,12 @@ function buildIssueDetail(i){
     if(i.quantity)meta.push(`${esc(i.quantity)}× unit${Number(i.quantity)===1?'':'s'}`);
     if(meta.length)parts.push(`<div style="margin-top:3px;font-size:10px;color:var(--text-muted)">${meta.join(' · ')}</div>`);
   }
-  // Always surface the catalog-level explanation if present (applies to Slack items that couldn't be matched too)
-  const help=CATALOG_ISSUE_HELP[i.craftable_status||''];
+  // Both-names panel — when a match exists but is a REVIEW tier, spell out both sides so the counter can sanity-check.
+  if(i.craftable_match&&i.craftable_match!==i.item_name){
+    const score=i.match_score!=null?` · ${i.match_score}%`:'';
+    parts.push(`<div style="margin-top:${parts.length?'6px':'0'};font-size:10px;color:var(--text-muted)"><div>Slack/Source: <span style="color:var(--text)">${esc(i.item_name)}</span></div><div>Craftable AVT: <span style="color:var(--text)">${esc(i.craftable_match)}</span>${score}</div></div>`);
+  }
+  const help=catalogHelpFor(i.craftable_status||'');
   if(help){
     parts.push(`<div style="margin-top:${parts.length?'6px':'0'};padding:4px 6px;background:rgba(220,38,38,0.08);border-left:2px solid #dc2626;font-size:10px;line-height:1.35">${esc(help)}</div>`);
   }
