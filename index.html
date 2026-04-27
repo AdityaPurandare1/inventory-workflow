@@ -5,164 +5,209 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>H.Wood Inventory Workflow</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Roboto:ital,wght@0,300..900;1,300..900&family=JetBrains+Mono:wght@300;400;500;600;700&display=swap" rel="stylesheet">
 <style>
+/* ─────────────────────────────────────────────
+   Woody Design System — bone/ink minimalism
+   ───────────────────────────────────────────── */
 :root {
-  --bg-deep: #06060c;
-  --bg-surface: #0c0c16;
-  --bg-elevated: #12121f;
-  --bg-hover: #1a1a2e;
-  --border: #1e1e32;
-  --border-active: #f5c842;
-  --text-primary: #e8e8f4;
-  --text-secondary: #7a7a9e;
-  --text-muted: #4a4a6a;
-  --accent: #f5c842;
-  --accent-dim: rgba(245, 200, 66, 0.12);
-  --critical: #ff5252;
-  --critical-bg: rgba(255, 82, 82, 0.1);
-  --high: #ff8a65;
-  --high-bg: rgba(255, 138, 101, 0.1);
-  --medium: #f5c842;
-  --medium-bg: rgba(245, 200, 66, 0.1);
-  --watch: #64b5f6;
-  --watch-bg: rgba(100, 181, 246, 0.1);
-  --low: #6bcf97;
-  --low-bg: rgba(107, 207, 151, 0.1);
-  --success: #6bcf97;
-  --error: #ff5252;
-  --radius: 8px;
-  --mono: 'JetBrains Mono', monospace;
-  --serif: 'Instrument Serif', serif;
+  /* Woody base tokens */
+  --woody-ink:           rgb(26, 26, 28);
+  --woody-ink-2:         rgb(35, 31, 32);
+  --woody-ink-3:         rgb(61, 61, 64);
+  --woody-ink-4:         rgb(92, 92, 96);
+  --woody-mute:          rgb(134, 129, 128);
+  --woody-mute-2:        rgb(145, 140, 139);
+  --woody-line:          rgb(154, 154, 158);
+  --woody-line-soft:     rgb(217, 217, 217);
+  --woody-line-warm:     rgb(235, 232, 227);
+  --woody-bone:          rgb(255, 249, 245);
+  --woody-paper:         rgb(245, 243, 239);
+  --woody-white:         rgb(255, 255, 255);
+  --woody-info:          rgb(104, 130, 168);  /* slate-blue */
+  --woody-success:       rgb(74, 143, 122);   /* sage */
+  --woody-error:         rgb(163, 27, 0);     /* oxide red */
+  --woody-warm:          rgb(184, 135, 90);   /* tan accent */
+  --woody-warm-2:        rgb(197, 154, 109);  /* tan light */
+
+  /* Aliased tokens — preserved names so JS string templates still resolve */
+  --bg-deep:             var(--woody-bone);
+  --bg-surface:          var(--woody-paper);
+  --bg-elevated:         var(--woody-white);
+  --bg-hover:            rgba(35, 31, 32, 0.04);
+  --border:              var(--woody-line-warm);
+  --border-active:       var(--woody-ink);
+  --text-primary:        var(--woody-ink-2);
+  --text-secondary:      var(--woody-ink-3);
+  --text-muted:          var(--woody-ink-4);
+  --accent:              var(--woody-ink);            /* primary action = ink */
+  --accent-dim:          rgba(35, 31, 32, 0.06);
+
+  /* Severity palette (Woody-tuned) */
+  --critical:            var(--woody-error);
+  --critical-bg:         rgba(163, 27, 0, 0.07);
+  --high:                var(--woody-warm);
+  --high-bg:             rgba(184, 135, 90, 0.10);
+  --medium:              var(--woody-warm-2);
+  --medium-bg:           rgba(197, 154, 109, 0.10);
+  --watch:               var(--woody-info);
+  --watch-bg:            rgba(104, 130, 168, 0.10);
+  --low:                 var(--woody-success);
+  --low-bg:              rgba(74, 143, 122, 0.10);
+  --success:             var(--woody-success);
+  --error:               var(--woody-error);
+
+  --radius:              6px;
+  --mono:                "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+  --serif:               "Roboto", Arial, Helvetica, sans-serif;
+  --sans:                "Roboto", Arial, Helvetica, system-ui, sans-serif;
+  --shadow-1:            0 1px 2px 0 rgba(61,61,64,0.20);
+  --shadow-2:            0 4px 12px 0 rgba(61,61,64,0.10);
 }
-*{margin:0;padding:0;box-sizing:border-box}
-body{background:var(--bg-deep);color:var(--text-primary);font-family:var(--mono);font-size:13px;min-height:100vh}
-body::before{content:'';position:fixed;top:-40%;left:-20%;width:80%;height:80%;background:radial-gradient(ellipse,rgba(245,200,66,0.025) 0%,transparent 70%);pointer-events:none;z-index:0}
-.app{position:relative;z-index:1;max-width:1140px;margin:0 auto;padding:32px 24px 80px}
+
+* { margin:0; padding:0; box-sizing:border-box; }
+body { background: var(--woody-bone); color: var(--woody-ink-2); font-family: var(--sans); font-size: 14px; line-height: 1.45; min-height: 100vh; -webkit-font-smoothing: antialiased; }
+body::before { display: none; }
+.app { position: relative; max-width: 1140px; margin: 0 auto; padding: 32px 24px 80px; }
 
 /* Header */
-.hdr{margin-bottom:32px;display:flex;align-items:flex-end;justify-content:space-between;flex-wrap:wrap;gap:12px}
-.hdr h1{font-family:var(--serif);font-size:2.5rem;font-weight:400;color:var(--accent);letter-spacing:-0.02em;line-height:1}
-.hdr .tag{color:var(--text-muted);font-size:10px;letter-spacing:0.1em;text-transform:uppercase;margin-top:4px}
-.hdr-r{display:flex;gap:8px;align-items:center}
+.hdr { margin-bottom: 32px; display: flex; align-items: flex-end; justify-content: space-between; flex-wrap: wrap; gap: 12px; padding-bottom: 20px; border-bottom: 1px solid var(--border); }
+.hdr h1 { font-family: var(--sans); font-size: 36px; font-weight: 700; color: var(--woody-ink); letter-spacing: -0.01em; line-height: 1.1; }
+.hdr .tag { color: var(--woody-ink-4); font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; margin-top: 6px; }
+.hdr-r { display: flex; gap: 8px; align-items: center; }
 
-/* Auto-run indicator */
-.auto-indicator{display:flex;align-items:center;gap:6px;padding:6px 12px;border-radius:20px;font-size:10px;font-weight:600;letter-spacing:0.05em}
-.auto-indicator.running{background:rgba(107,207,151,0.12);color:var(--success);border:1px solid rgba(107,207,151,0.25)}
-.auto-indicator.stopped{background:var(--critical-bg);color:var(--text-muted);border:1px solid var(--border)}
-.auto-indicator .dot{width:7px;height:7px;border-radius:50%;flex-shrink:0}
-.auto-indicator.running .dot{background:var(--success);animation:pulse 2s infinite}
-.auto-indicator.stopped .dot{background:var(--text-muted)}
-@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.3}}
+/* Auto indicator */
+.auto-indicator { display: flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 999px; font-size: 11px; font-weight: 500; letter-spacing: 0.04em; border: 1px solid var(--border); }
+.auto-indicator.running { background: rgba(74,143,122,0.08); color: var(--woody-success); border-color: rgba(74,143,122,0.25); }
+.auto-indicator.stopped { background: var(--woody-paper); color: var(--woody-ink-4); }
+.auto-indicator .dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+.auto-indicator.running .dot { background: var(--woody-success); animation: pulse 2s infinite; }
+.auto-indicator.stopped .dot { background: var(--woody-mute); }
+@keyframes pulse { 0%,100% { opacity: 1 } 50% { opacity: 0.3 } }
 
 /* Tabs */
-.tabs{display:flex;gap:2px;background:var(--bg-surface);border-radius:var(--radius);padding:3px;margin-bottom:24px;border:1px solid var(--border)}
-.tab{flex:1;padding:10px 12px;text-align:center;font-family:var(--mono);font-size:10px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:var(--text-muted);background:transparent;border:none;border-radius:6px;cursor:pointer;transition:all 0.2s}
-.tab:hover{color:var(--text-secondary)}
-.tab.active{background:var(--bg-elevated);color:var(--accent);box-shadow:0 1px 4px rgba(0,0,0,0.3)}
-.tab .badge{display:inline-block;background:var(--accent-dim);color:var(--accent);font-size:9px;padding:1px 6px;border-radius:10px;margin-left:4px}
+.tabs { display: flex; gap: 4px; background: var(--woody-paper); border-radius: 8px; padding: 4px; margin-bottom: 24px; border: 1px solid var(--border); }
+.tab { flex: 1; padding: 10px 12px; text-align: center; font-family: var(--sans); font-size: 12px; font-weight: 500; letter-spacing: 0.02em; color: var(--woody-ink-4); background: transparent; border: none; border-radius: 5px; cursor: pointer; transition: all 0.15s; }
+.tab:hover { color: var(--woody-ink-2); background: rgba(255,255,255,0.5); }
+.tab.active { background: var(--woody-white); color: var(--woody-ink); box-shadow: var(--shadow-1); }
+.tab .badge { display: inline-block; background: var(--woody-ink); color: var(--woody-bone); font-size: 10px; font-weight: 600; padding: 1px 7px; border-radius: 999px; margin-left: 4px; }
 
 /* Panels */
-.pnl{display:none;animation:fadeIn 0.25s ease}
-.pnl.active{display:block}
-@keyframes fadeIn{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:translateY(0)}}
+.pnl { display: none; animation: fadeIn 0.25s ease; }
+.pnl.active { display: block; }
+@keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
 
 /* Forms */
-label{display:block;font-size:10px;color:var(--text-secondary);letter-spacing:0.12em;text-transform:uppercase;margin-bottom:6px;font-weight:500}
-select,input[type="text"],input[type="password"],input[type="number"],textarea{width:100%;background:var(--bg-surface);border:1px solid var(--border);border-radius:var(--radius);color:var(--text-primary);font-family:var(--mono);font-size:12px;padding:10px 12px;outline:none;transition:border-color 0.2s,box-shadow 0.2s;margin-bottom:14px}
-select:focus,input:focus,textarea:focus{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-dim)}
-textarea{height:180px;resize:vertical;line-height:1.7}
-.hint{font-size:10px;color:var(--text-muted);margin-top:-8px;margin-bottom:14px;line-height:1.5}
+label { display: block; font-size: 11px; color: var(--woody-ink-3); letter-spacing: 0.06em; text-transform: uppercase; margin-bottom: 6px; font-weight: 500; }
+select, input[type="text"], input[type="password"], input[type="number"], textarea { width: 100%; background: var(--woody-white); border: 1px solid var(--border); border-radius: 4px; color: var(--woody-ink-2); font-family: var(--sans); font-size: 14px; padding: 10px 12px; outline: none; transition: border-color 0.15s, box-shadow 0.15s; margin-bottom: 14px; }
+select:focus, input:focus, textarea:focus { border-color: var(--woody-ink); box-shadow: 0 0 0 3px rgba(35,31,32,0.08); }
+textarea { height: 180px; resize: vertical; line-height: 1.6; font-family: var(--mono); font-size: 13px; }
+.hint { font-size: 12px; color: var(--woody-ink-4); margin-top: -8px; margin-bottom: 14px; line-height: 1.5; }
 
 /* Rows & buttons */
-.row{display:flex;gap:8px;align-items:flex-end}
-.row .field{flex:1}
-.row select,.row input{margin-bottom:0}
-.btn{background:var(--accent);color:var(--bg-deep);border:none;border-radius:var(--radius);padding:11px 22px;font-family:var(--mono);font-size:11px;font-weight:600;cursor:pointer;transition:opacity 0.2s;white-space:nowrap}
-.btn:hover{opacity:0.88}
-.btn:disabled{opacity:0.35;cursor:not-allowed}
-.btn-full{width:100%}
-.btn-s{background:var(--bg-elevated);color:var(--text-primary);border:1px solid var(--border);border-radius:var(--radius);padding:8px 14px;font-family:var(--mono);font-size:10px;cursor:pointer;transition:all 0.2s;white-space:nowrap}
-.btn-s:hover{border-color:var(--text-muted)}
-.btn-dng{color:var(--error);border-color:rgba(255,82,82,0.3)}
-.btn-dng:hover{border-color:var(--error);background:var(--critical-bg)}
-.btn-add{background:var(--bg-elevated);border:1px dashed var(--border);color:var(--accent);padding:10px 14px;border-radius:var(--radius);cursor:pointer;font-family:var(--mono);font-size:11px;transition:all 0.2s;flex-shrink:0}
-.btn-add:hover{border-color:var(--accent);background:var(--accent-dim)}
+.row { display: flex; gap: 8px; align-items: flex-end; }
+.row .field { flex: 1; }
+.row select, .row input { margin-bottom: 0; }
+.btn { background: var(--woody-ink); color: var(--woody-bone); border: 1px solid var(--woody-ink); border-radius: 6px; padding: 11px 22px; font-family: var(--sans); font-size: 13px; font-weight: 500; cursor: pointer; transition: background 0.15s, transform 0.1s; white-space: nowrap; }
+.btn:hover { background: var(--woody-ink-2); }
+.btn:active { transform: translateY(0.5px); }
+.btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.btn-full { width: 100%; }
+.btn-s { background: var(--woody-white); color: var(--woody-ink-2); border: 1px solid var(--border); border-radius: 5px; padding: 8px 14px; font-family: var(--sans); font-size: 12px; cursor: pointer; transition: all 0.15s; white-space: nowrap; }
+.btn-s:hover { border-color: var(--woody-line); background: var(--woody-paper); }
+.btn-dng { color: var(--woody-error); border-color: rgba(163,27,0,0.3); }
+.btn-dng:hover { border-color: var(--woody-error); background: rgba(163,27,0,0.05); }
+.btn-add { background: var(--woody-paper); border: 1px dashed var(--woody-line); color: var(--woody-ink-2); padding: 10px 14px; border-radius: 5px; cursor: pointer; font-family: var(--sans); font-size: 12px; transition: all 0.15s; flex-shrink: 0; }
+.btn-add:hover { border-color: var(--woody-ink); background: var(--woody-white); }
 
-/* Result */
-.result{margin-top:16px;padding:14px 18px;border-radius:var(--radius);font-size:12px;line-height:1.7;display:none;animation:fadeIn 0.3s}
-.result.ok{background:var(--low-bg);border:1px solid rgba(107,207,151,0.25);color:var(--success)}
-.result.err{background:var(--critical-bg);border:1px solid rgba(255,82,82,0.25);color:var(--error)}
-.result.info{background:var(--watch-bg);border:1px solid rgba(100,181,246,0.2);color:var(--watch)}
+/* Result panels */
+.result { margin-top: 16px; padding: 14px 18px; border-radius: 6px; font-size: 13px; line-height: 1.6; display: none; animation: fadeIn 0.3s; border: 1px solid; }
+.result.ok { background: rgba(74,143,122,0.08); border-color: rgba(74,143,122,0.25); color: var(--woody-success); }
+.result.err { background: rgba(163,27,0,0.06); border-color: rgba(163,27,0,0.25); color: var(--woody-error); }
+.result.info { background: rgba(104,130,168,0.06); border-color: rgba(104,130,168,0.25); color: var(--woody-info); }
 
 /* Severity badges */
-.sev{padding:3px 9px;border-radius:4px;font-size:9px;font-weight:700;letter-spacing:0.06em;flex-shrink:0;text-transform:uppercase;display:inline-block}
-.sev-CRITICAL{background:var(--critical-bg);color:var(--critical)}
-.sev-HIGH{background:var(--high-bg);color:var(--high)}
-.sev-MEDIUM{background:var(--medium-bg);color:var(--medium)}
-.sev-WATCH{background:var(--watch-bg);color:var(--watch)}
-.sev-LOW{background:var(--low-bg);color:var(--low)}
+.sev { padding: 3px 9px; border-radius: 4px; font-size: 10px; font-weight: 600; letter-spacing: 0.04em; flex-shrink: 0; text-transform: uppercase; display: inline-block; }
+.sev-CRITICAL { background: rgba(163,27,0,0.08); color: var(--woody-error); }
+.sev-HIGH { background: rgba(184,135,90,0.12); color: var(--woody-warm); }
+.sev-MEDIUM { background: rgba(197,154,109,0.12); color: var(--woody-warm-2); }
+.sev-WATCH { background: rgba(104,130,168,0.10); color: var(--woody-info); }
+.sev-LOW { background: rgba(74,143,122,0.08); color: var(--woody-success); }
 
-/* Stats */
-.stats{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px}
-.stat{flex:1;min-width:110px;background:var(--bg-surface);border:1px solid var(--border);border-radius:var(--radius);padding:12px 14px}
-.stat .n{font-size:1.5rem;font-family:var(--serif);font-weight:400;color:var(--accent)}
-.stat .l{font-size:9px;color:var(--text-muted);letter-spacing:0.1em;text-transform:uppercase;margin-top:2px}
+/* Stats tiles */
+.stats { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 16px; }
+.stat { flex: 1; min-width: 110px; background: var(--woody-white); border: 1px solid var(--border); border-radius: 6px; padding: 14px 16px; }
+.stat .n { font-size: 24px; font-family: var(--sans); font-weight: 700; color: var(--woody-ink); line-height: 1.1; }
+.stat .l { font-size: 11px; color: var(--woody-ink-4); letter-spacing: 0.06em; text-transform: uppercase; margin-top: 4px; }
 
-/* Table */
-.tbl-ctrl{display:flex;gap:8px;flex-wrap:wrap;justify-content:space-between;align-items:center;margin-bottom:10px}
-.tbl-ctrl .left{display:flex;gap:8px;flex-wrap:wrap}
-.fsel{width:auto;margin:0;padding:6px 10px;font-size:10px;min-width:130px}
-.tbl-wrap{overflow-x:auto;border:1px solid var(--border);border-radius:var(--radius);max-height:70vh;overflow-y:auto}
-table{width:100%;border-collapse:collapse;font-size:11px}
-thead th{background:var(--bg-elevated);color:var(--accent);font-size:9px;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;padding:9px 10px;text-align:left;border-bottom:1px solid var(--border);white-space:nowrap;cursor:pointer;user-select:none;position:sticky;top:0;z-index:2}
-thead th:hover{color:var(--text-primary)}
-thead th .sa{margin-left:3px;opacity:0.4}
-thead th.sorted .sa{opacity:1;color:var(--accent)}
-tbody td{padding:7px 10px;border-bottom:1px solid rgba(255,255,255,0.03);color:var(--text-primary);vertical-align:middle}
-tbody tr:hover{background:rgba(255,255,255,0.02)}
-td.num{text-align:right;font-variant-numeric:tabular-nums}
-.vn{color:var(--critical)}.vp{color:var(--low)}
-.recount-flag{display:inline-block;background:var(--critical-bg);color:var(--critical);font-size:9px;font-weight:700;padding:2px 8px;border-radius:3px;letter-spacing:0.06em}
-.no-rc{color:var(--text-muted);font-size:10px}
+/* Tables */
+.tbl-ctrl { display: flex; gap: 8px; flex-wrap: wrap; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+.tbl-ctrl .left { display: flex; gap: 8px; flex-wrap: wrap; }
+.fsel { width: auto; margin: 0; padding: 7px 10px; font-size: 12px; min-width: 130px; }
+.tbl-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: 6px; max-height: 70vh; overflow-y: auto; background: var(--woody-white); }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+thead th { background: var(--woody-paper); color: var(--woody-ink-3); font-size: 11px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; padding: 10px 12px; text-align: left; border-bottom: 1px solid var(--border); white-space: nowrap; cursor: pointer; user-select: none; position: sticky; top: 0; z-index: 2; }
+thead th:hover { color: var(--woody-ink); background: var(--woody-line-warm); }
+thead th .sa { margin-left: 3px; opacity: 0.4; }
+thead th.sorted .sa { opacity: 1; color: var(--woody-ink); }
+tbody td { padding: 9px 12px; border-bottom: 1px solid var(--border); color: var(--woody-ink-2); vertical-align: middle; }
+tbody tr:hover { background: var(--woody-bone); }
+td.num { text-align: right; font-variant-numeric: tabular-nums; }
+.vn { color: var(--woody-error); }
+.vp { color: var(--woody-success); }
+.recount-flag { display: inline-block; background: rgba(163,27,0,0.10); color: var(--woody-error); font-size: 10px; font-weight: 600; padding: 2px 8px; border-radius: 3px; letter-spacing: 0.04em; }
+.no-rc { color: var(--woody-mute); font-size: 11px; }
 
-/* Cards */
-.issue-cards{display:grid;gap:6px;margin-top:10px}
-.ic{display:flex;justify-content:space-between;align-items:center;padding:8px 12px;background:var(--bg-surface);border:1px solid var(--border);border-radius:6px}
-.ic .nm{font-size:11px}.ic .mt{font-size:9px;color:var(--text-muted);margin-top:1px}
+/* Issue cards */
+.issue-cards { display: grid; gap: 6px; margin-top: 10px; }
+.ic { display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; background: var(--woody-white); border: 1px solid var(--border); border-radius: 6px; }
+.ic .nm { font-size: 13px; color: var(--woody-ink-2); }
+.ic .mt { font-size: 11px; color: var(--woody-ink-4); margin-top: 2px; }
 
-/* Settings */
-.sg{background:var(--bg-surface);border:1px solid var(--border);border-radius:var(--radius);padding:18px;margin-bottom:14px}
-.sg h3{font-family:var(--serif);font-size:1.1rem;font-weight:400;color:var(--text-primary);margin-bottom:10px}
-.lt{display:flex;flex-wrap:wrap;gap:4px;margin-bottom:10px;min-height:28px}
-.ltg{display:inline-flex;align-items:center;gap:6px;background:var(--bg-elevated);border:1px solid var(--border);border-radius:16px;padding:4px 11px;font-size:10px}
-.ltg .x{cursor:pointer;color:var(--text-muted);transition:color 0.2s}.ltg .x:hover{color:var(--error)}
-.add-loc{display:none;margin-bottom:14px;padding:12px;background:var(--bg-surface);border:1px solid var(--border);border-radius:var(--radius)}
-.add-loc.open{display:block}
+/* Settings groups */
+.sg { background: var(--woody-white); border: 1px solid var(--border); border-radius: 8px; padding: 20px; margin-bottom: 16px; }
+.sg h3 { font-family: var(--sans); font-size: 18px; font-weight: 700; color: var(--woody-ink); margin-bottom: 12px; }
+.lt { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 10px; min-height: 28px; }
+.ltg { display: inline-flex; align-items: center; gap: 6px; background: var(--woody-paper); border: 1px solid var(--border); border-radius: 999px; padding: 4px 11px; font-size: 12px; color: var(--woody-ink-2); }
+.ltg .x { cursor: pointer; color: var(--woody-ink-4); transition: color 0.15s; }
+.ltg .x:hover { color: var(--woody-error); }
+.add-loc { display: none; margin-bottom: 14px; padding: 14px; background: var(--woody-paper); border: 1px solid var(--border); border-radius: 6px; }
+.add-loc.open { display: block; }
 
-/* API Explorer */
-.api-log{background:var(--bg-surface);border:1px solid var(--border);border-radius:var(--radius);padding:14px;margin-top:14px;max-height:300px;overflow-y:auto;font-size:10px;line-height:1.6;white-space:pre-wrap;word-break:break-all;color:var(--text-secondary)}
-.api-log .req{color:var(--accent)}.api-log .ok{color:var(--success)}.api-log .fail{color:var(--error)}.api-log .info{color:var(--watch)}
+/* API explorer log */
+.api-log { background: var(--woody-paper); border: 1px solid var(--border); border-radius: 6px; padding: 14px; margin-top: 14px; max-height: 300px; overflow-y: auto; font-size: 12px; line-height: 1.6; white-space: pre-wrap; word-break: break-all; color: var(--woody-ink-3); font-family: var(--mono); }
+.api-log .req { color: var(--woody-ink); }
+.api-log .ok { color: var(--woody-success); }
+.api-log .fail { color: var(--woody-error); }
+.api-log .info { color: var(--woody-info); }
 
-/* Empty */
-.empty{text-align:center;padding:40px 24px;color:var(--text-muted);font-size:12px;line-height:1.8}
-.empty .ico{font-size:24px;margin-bottom:8px;display:block}
+/* Empty state */
+.empty { text-align: center; padding: 48px 24px; color: var(--woody-ink-4); font-size: 13px; line-height: 1.7; }
+.empty .ico { font-size: 32px; margin-bottom: 12px; display: block; opacity: 0.5; }
 
-/* Spinner & Toast */
-.spin{display:inline-block;animation:sp .7s linear infinite}
-@keyframes sp{to{transform:rotate(360deg)}}
-.toast{position:fixed;bottom:24px;right:24px;background:var(--bg-elevated);border:1px solid var(--border);color:var(--text-primary);padding:10px 18px;border-radius:var(--radius);font-size:11px;z-index:999;animation:su .3s ease,fo .3s ease 2.5s forwards}
-@keyframes su{from{transform:translateY(20px);opacity:0}}
-@keyframes fo{to{opacity:0;transform:translateY(-10px)}}
-
-/* Responsive */
-@media(max-width:640px){.hdr h1{font-size:2rem}.row,.tbl-ctrl{flex-direction:column}.stats{flex-direction:column}.fsel{width:100%}.tbl-ctrl .left{width:100%}}
+/* Spinner & toast */
+.spin { display: inline-block; animation: sp .7s linear infinite; }
+@keyframes sp { to { transform: rotate(360deg); } }
+.toast { position: fixed; bottom: 24px; right: 24px; background: var(--woody-ink); border: 1px solid var(--woody-ink); color: var(--woody-bone); padding: 12px 20px; border-radius: 6px; font-size: 13px; z-index: 999; animation: su .3s ease, fo .3s ease 2.5s forwards; box-shadow: var(--shadow-2); }
+@keyframes su { from { transform: translateY(20px); opacity: 0; } }
+@keyframes fo { to { opacity: 0; transform: translateY(-10px); } }
 
 /* Image drop zone */
-#imgDrop.dragover{border-color:var(--accent);background:var(--accent-dim)}
-.img-thumb{position:relative;width:64px;height:64px;border-radius:6px;overflow:hidden;border:1px solid var(--border)}
-.img-thumb img{width:100%;height:100%;object-fit:cover}
-.img-thumb .rm{position:absolute;top:2px;right:2px;width:18px;height:18px;background:rgba(0,0,0,0.7);color:var(--error);border:none;border-radius:50%;font-size:12px;cursor:pointer;display:flex;align-items:center;justify-content:center;line-height:1}
+#imgDrop { background: var(--woody-paper); }
+#imgDrop.dragover { border-color: var(--woody-ink); background: rgba(35,31,32,0.04); }
+.img-thumb { position: relative; width: 64px; height: 64px; border-radius: 6px; overflow: hidden; border: 1px solid var(--border); }
+.img-thumb img { width: 100%; height: 100%; object-fit: cover; }
+.img-thumb .rm { position: absolute; top: 2px; right: 2px; width: 18px; height: 18px; background: rgba(35,31,32,0.7); color: var(--woody-bone); border: none; border-radius: 50%; font-size: 12px; cursor: pointer; display: flex; align-items: center; justify-content: center; line-height: 1; }
+
+/* Responsive */
+@media (max-width: 640px) {
+  .hdr h1 { font-size: 28px; }
+  .row, .tbl-ctrl { flex-direction: column; }
+  .stats { flex-direction: column; }
+  .fsel { width: 100%; }
+  .tbl-ctrl .left { width: 100%; }
+}
 </style>
 </head>
 <body>
@@ -204,12 +249,12 @@ td.num{text-align:right;font-variant-numeric:tabular-nums}
       </div>
       <button class="btn-add" onclick="toggleAdd()">+ New</button>
     </div>
-    <div id="countHint" class="hint" style="margin-top:-8px;margin-bottom:12px;padding:8px 12px;background:var(--accent-dim);border-radius:6px;border:1px solid rgba(245,200,66,0.2)">
+    <div id="countHint" class="hint" style="margin-top:-8px;margin-bottom:12px;padding:10px 14px;background:var(--woody-paper);border-radius:6px;border:1px solid var(--border)">
       <strong style="color:var(--accent)">Count 1:</strong> Pull Slack messages → Parse issues → Import Craftable AVT → Generate recount list
     </div>
     <div class="add-loc" id="addBox"><div class="row"><input type="text" id="newLN" placeholder="e.g. Delilah - Vegas" style="margin:0"><button class="btn-s" onclick="addLoc()">Add</button><button class="btn-s" onclick="toggleAdd()">Cancel</button></div></div>
 
-    <button class="btn" id="slackPullBtn" onclick="pullFromSlack()" style="width:100%;margin-bottom:10px;background:var(--bg-elevated);border:1px solid #4A154B;color:#E8D5E0">
+    <button class="btn" id="slackPullBtn" onclick="pullFromSlack()" style="width:100%;margin-bottom:10px;background:#4A154B;border-color:#4A154B;color:#fff">
       <span style="font-size:14px">⚡</span> Pull from Slack
     </button>
     <p class="hint" id="slackPullStatus" style="display:none;margin-top:-6px;margin-bottom:10px"></p>
@@ -774,7 +819,20 @@ async function pullFromSlack(){
     }
 
     status.style.color='var(--success)';
-    status.textContent=`✓ Pulled ${textParts.length} messages + ${imageFiles.length} images from #${channelName}. Hit "Parse & Add Issues" to process.`;
+    status.textContent=`✓ Pulled ${textParts.length} messages + ${imageFiles.length} images from #${channelName}. Refreshing Craftable AVT...`;
+
+    // Every Slack pull → fresh Craftable AVT (so Parse cross-references against current data).
+    const slackSummary=`Slack: ${textParts.length} msgs + ${imageFiles.length} imgs from #${channelName}.`;
+    const craftRes=await runCraftableBotPull(msg=>{
+      status.textContent=`${slackSummary} Craftable: ${msg}`;
+    });
+    if(craftRes.ok){
+      status.style.color='var(--success)';
+      status.textContent=`✓ ${slackSummary} Fresh Craftable AVT imported. Hit "Parse & Add Issues" to process.`;
+    }else{
+      status.style.color='var(--watch)';
+      status.textContent=`✓ ${slackSummary} Craftable refresh failed (${craftRes.error}) — import AVT manually or hit Parse anyway.`;
+    }
 
   }catch(e){
     status.textContent='Error: '+e.message;
@@ -954,6 +1012,68 @@ async function testVariance(){
 // ═══════════════════════════════════════════════════
 const CRAFT_BOT='http://localhost:3456';
 
+// Reusable bot-pull routine. `onStatus(msg)` receives progress strings.
+// Returns {ok:true} on success, {ok:false, error} on failure.
+async function runCraftableBotPull(onStatus){
+  const setStatus=msg=>{ if(typeof onStatus==='function')onStatus(msg); };
+
+  setStatus('Connecting to Craftable bot...');
+  let botOk=false;
+  try{
+    const check=await fetch(`${CRAFT_BOT}/status`,{signal:AbortSignal.timeout(3000)});
+    if(check.ok)botOk=true;
+  }catch(e){}
+
+  if(!botOk){
+    setStatus('⚠️ Craftable bot is not running. Start it with: node craftable-bot.js');
+    return{ok:false,error:'bot_not_running'};
+  }
+
+  setStatus('Telling bot to download AVT for all stores...');
+  const res=await fetch(`${CRAFT_BOT}/download?store=all`);
+  const data=await res.json();
+  if(!data.ok){
+    const err=data.error||'Unknown';
+    setStatus('Error: '+err);
+    return{ok:false,error:err};
+  }
+
+  setStatus('Bot is working... logging in & navigating Craftable');
+  for(let i=0;i<60;i++){
+    await new Promise(r=>setTimeout(r,3000));
+    try{
+      const poll=await fetch(`${CRAFT_BOT}/status`);
+      const st=await poll.json();
+      setStatus(`Bot: ${st.status}`);
+      if(st.status.startsWith('done:')){
+        setStatus('Downloading file from bot...');
+        const fileRes=await fetch(`${CRAFT_BOT}/file`);
+        if(!fileRes.ok){setStatus('Failed to get file from bot');return{ok:false,error:'file_fetch_failed'}}
+        const blob=await fileRes.blob();
+        if(typeof XLSX==='undefined'){
+          setStatus('Loading XLSX library...');
+          await new Promise((resolve,reject)=>{
+            const s=document.createElement('script');
+            s.src='https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
+            s.onload=resolve;s.onerror=reject;
+            document.head.appendChild(s);
+          });
+        }
+        const fakeEvent={target:{files:[new File([blob],st.status.replace('done: ',''),{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'})]}};
+        importCSV(fakeEvent);
+        setStatus('✅ Auto-imported AVT');
+        return{ok:true};
+      }
+      if(st.status.startsWith('error:')){
+        setStatus(st.status);
+        return{ok:false,error:st.status};
+      }
+    }catch(e){}
+  }
+  setStatus('Bot timed out after 3 minutes');
+  return{ok:false,error:'timeout'};
+}
+
 async function pullCraftableBot(){
   const venueEl=document.getElementById('cVen');
   const venue=venueEl?venueEl.value:'';
@@ -963,81 +1083,15 @@ async function pullCraftableBot(){
   btn.disabled=true;
   status.style.display='block';
   status.style.color='var(--accent)';
-  status.textContent='Connecting to Craftable bot...';
 
   try{
-    // Check if bot is running
-    let botOk=false;
-    try{
-      const check=await fetch(`${CRAFT_BOT}/status`,{signal:AbortSignal.timeout(3000)});
-      if(check.ok)botOk=true;
-    }catch(e){}
-
-    if(!botOk){
-      status.textContent='⚠️ Craftable bot is not running. Start it with: node craftable-bot.js';
+    const result=await runCraftableBotPull(msg=>{status.textContent=msg});
+    if(result.ok){
+      status.style.color='var(--success)';
+      status.textContent=`✅ Auto-imported AVT${venue?' for '+venue:''}`;
+    }else{
       status.style.color='var(--error)';
-      return;
     }
-
-    // Trigger download
-    status.textContent='Telling bot to download AVT for all stores...';
-    const res=await fetch(`${CRAFT_BOT}/download?store=all`);
-    const data=await res.json();
-
-    if(!data.ok){
-      status.textContent='Error: '+(data.error||'Unknown');
-      status.style.color='var(--error)';
-      return;
-    }
-
-    // Poll status until done
-    status.textContent='Bot is working... logging in & navigating Craftable';
-    for(let i=0;i<60;i++){
-      await new Promise(r=>setTimeout(r,3000));
-      try{
-        const poll=await fetch(`${CRAFT_BOT}/status`);
-        const st=await poll.json();
-        status.textContent=`Bot: ${st.status}`;
-        if(st.status.startsWith('done:')){
-          // Download the file from bot and import it
-          status.textContent='Downloading file from bot...';
-          const fileRes=await fetch(`${CRAFT_BOT}/file`);
-          if(!fileRes.ok)throw new Error('Failed to get file from bot');
-          const blob=await fileRes.blob();
-          const arrayBuf=await blob.arrayBuffer();
-
-          // Import using XLSX
-          if(typeof XLSX==='undefined'){
-            status.textContent='Loading XLSX library...';
-            await new Promise((resolve,reject)=>{
-              const s=document.createElement('script');
-              s.src='https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
-              s.onload=resolve;s.onerror=reject;
-              document.head.appendChild(s);
-            });
-          }
-
-          const wb=XLSX.read(arrayBuf,{type:'array'});
-          // Trigger the same import logic as file upload
-          const fakeEvent={target:{files:[new File([blob],st.status.replace('done: ',''),{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'})]}};
-          importCSV(fakeEvent);
-
-          status.style.color='var(--success)';
-          status.textContent=`✅ Auto-imported AVT for ${venue}`;
-          return;
-        }
-        if(st.status.startsWith('error:')){
-          status.textContent='Bot error: '+st.status;
-          status.style.color='var(--error)';
-          return;
-        }
-      }catch(e){/* polling error, retry */}
-    }
-    status.textContent='Timed out waiting for bot (3 min). Check bot terminal.';
-    status.style.color='var(--error)';
-  }catch(e){
-    status.textContent='Error: '+e.message;
-    status.style.color='var(--error)';
   }finally{
     btn.disabled=false;
   }
@@ -1616,6 +1670,9 @@ function scoreSev(i){
   return'LOW';
 }
 function needsRC(i){
+  // After Count 2, items are finalized — no third recount, regardless of severity.
+  // Remaining variances are real (shrinkage / theft / receiving error), not count error.
+  if(i.count2_finalized)return false;
   const s=i.severity;
   // Recount HIGH + CRITICAL always; MEDIUM as time allows; LOW skipped; WATCH monitor-only.
   if(s==='CRITICAL'||s==='HIGH'||s==='MEDIUM')return true;
@@ -2211,76 +2268,40 @@ function onCountPhaseChange(){
   const hint=document.getElementById('countHint');
   const parseBtn=document.getElementById('parseBtn');
   if(phase==='1'){
-    hint.innerHTML='<strong style="color:var(--accent)">Count 1:</strong> Pull Slack messages \u2192 Parse issues \u2192 Import Craftable AVT \u2192 Generate recount list';
+    hint.innerHTML='<strong style="color:var(--accent)">Count 1:</strong> Pull Slack (auto-refreshes Craftable AVT) \u2192 Parse issues \u2192 Generate recount list';
     parseBtn.textContent='Parse & Add Issues';
   }else{
-    hint.innerHTML='<strong style="color:var(--success)">Count 2 (Recount):</strong> Pull Slack messages \u2192 Parse \u2192 <strong>Auto-pull fresh Craftable AVT</strong> \u2192 Cross-reference \u2192 Resolved items auto-detected';
-    parseBtn.textContent='Parse & Run Recount';
+    hint.innerHTML='<strong style="color:var(--success)">Count 2 (Final):</strong> Pull Slack (auto-refreshes AVT) \u2192 Parse \u2192 Cross-reference \u2192 Resolved auto-detected. <strong>No further recounts after this</strong> \u2014 remaining variances are final.';
+    parseBtn.textContent='Parse & Finalize';
   }
 }
 
 async function runCount2PostProcess(venue,btn,res){
-  // After Count 2 parsing, automatically pull fresh Craftable data and cross-reference
-  btn.innerHTML='<span class="spin">\u27F3</span> Count 2: Pulling fresh Craftable AVT...';
+  // Count 2 = the second (and last) physical count. After this, no more recounts —
+  // remaining variances are real (shrinkage, theft, receiving error), not count error.
+  btn.innerHTML='<span class="spin">⟳</span> Count 2: Pulling fresh Craftable AVT...';
+  await runCraftableBotPull(msg=>{btn.innerHTML=`<span class="spin">⟳</span> ${msg}`});
+  // importCSV (called inside the helper) re-runs crossRef, so resolved/unresolved are now current.
 
-  // Try auto-pull from bot first
-  let botOk=false;
-  try{
-    const check=await fetch(`${CRAFT_BOT}/status`,{signal:AbortSignal.timeout(3000)});
-    if(check.ok)botOk=true;
-  }catch(e){}
-
-  if(botOk){
-    try{
-      const dlRes=await fetch(`${CRAFT_BOT}/download?store=all`);
-      const dlData=await dlRes.json();
-      if(dlData.ok){
-        btn.innerHTML='<span class="spin">\u27F3</span> Bot downloading fresh AVT report...';
-        // Poll until done
-        for(let i=0;i<60;i++){
-          await new Promise(r=>setTimeout(r,3000));
-          try{
-            const poll=await fetch(`${CRAFT_BOT}/status`);
-            const st=await poll.json();
-            btn.innerHTML=`<span class="spin">\u27F3</span> Bot: ${st.status}`;
-            if(st.status.startsWith('done:')){
-              btn.innerHTML='<span class="spin">\u27F3</span> Importing fresh Craftable data...';
-              const fileRes=await fetch(`${CRAFT_BOT}/file`);
-              if(fileRes.ok){
-                const blob=await fileRes.blob();
-                if(typeof XLSX==='undefined'){
-                  await new Promise((resolve,reject)=>{
-                    const s=document.createElement('script');
-                    s.src='https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
-                    s.onload=resolve;s.onerror=reject;
-                    document.head.appendChild(s);
-                  });
-                }
-                const fakeEvent={target:{files:[new File([blob],'avt_recount.xlsx',{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'})]}};
-                importCSV(fakeEvent);
-              }
-              break;
-            }
-            if(st.status.startsWith('error:'))break;
-          }catch(e){}
-        }
-      }
-    }catch(e){
-      console.warn('Bot auto-pull failed:',e.message);
+  // Finalize: items have been counted twice. Strip recount flags so the final report
+  // shows zero recount items. count2_finalized makes future crossRef passes respect this.
+  S.items.forEach(i=>{
+    if(!venue||normalize(i.venue)===normalize(normalizeVenue(venue))){
+      i.count2_finalized=true;
+      i.recount=false;
     }
-  }
+  });
+  sv();
+  updateBadge();
+  if(typeof renderData==='function')renderData();
 
-  // Cross-reference runs automatically via importCSV → crossRef
-  // Count resolved items
-  const resolved=S.items.filter(i=>i.resolved&&(i.venue===venue||!venue));
-  const unresolvedRC=S.items.filter(i=>!i.resolved&&i.recount&&(i.venue===venue||!venue));
+  const scope=S.items.filter(i=>!venue||normalize(i.venue)===normalize(normalizeVenue(venue)));
+  const resolved=scope.filter(i=>i.resolved);
+  const finalVar=scope.filter(i=>!i.resolved&&Math.abs(i.variance_dollars||0)>0);
 
-  if(resolved.length>0){
-    const existingHtml=res.innerHTML;
-    res.innerHTML=existingHtml+`<div style="margin-top:12px;padding:10px;background:rgba(45,106,79,0.15);border:1px solid rgba(45,106,79,0.3);border-radius:6px"><strong style="color:var(--success)">\u2713 Count 2 Complete:</strong> ${resolved.length} item(s) RESOLVED after recount. ${unresolvedRC.length} still need attention.</div>`;
-  }
+  const existingHtml=res.innerHTML;
+  res.innerHTML=existingHtml+`<div style="margin-top:12px;padding:10px;background:rgba(45,106,79,0.15);border:1px solid rgba(45,106,79,0.3);border-radius:6px"><strong style="color:var(--success)">✓ Count 2 Final:</strong> ${resolved.length} item(s) RESOLVED. ${finalVar.length} remain as final variances — no further recounts (investigate cause: receiving, theft, shrinkage).</div>`;
 }
-
 // ═══════════════════════════════════════════════════
 //  PARSE HANDLER
 // ═══════════════════════════════════════════════════
@@ -2397,7 +2418,7 @@ async function handleParse(){
   finally{
     btn.disabled=false;
     const phase=document.getElementById('countPhase').value;
-    btn.textContent=phase==='2'?'Parse & Run Recount':'Parse & Add Issues';
+    btn.textContent=phase==='2'?'Parse & Finalize':'Parse & Add Issues';
   }
 }
 
